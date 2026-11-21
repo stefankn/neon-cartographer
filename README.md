@@ -43,7 +43,7 @@ go build -o ncart ./cmd/ncart
 
 ```
 ncart -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert,master]
-      [-title "…"] [-artist "…"] [-mapper neon-cartographer] [-bpm 128] [-offset-ms 0] [-seed 42]
+      [-title "…"] [-artist "…"] [-mapper neon-cartographer] [-bpm 128] [-half-beat] [-offset-ms 0] [-seed 42]
       [-walls] [-no-cover] [-debug analysis.json]
 ```
 
@@ -52,6 +52,7 @@ ncart -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert,mast
 | `-difficulties` | any of easy, normal, hard, expert, master (default: easy,normal,hard,expert) |
 | `-title`, `-artist` | default: the file's tags, else the file name |
 | `-bpm` | override tempo detection (use it if the detected tempo is half/double) |
+| `-half-beat` | move the beat grid by half a beat, if `analyze -beat-test` shows the beat on the high tick |
 | `-offset-ms` | move all notes later (+) or earlier (−) if the timing feels off |
 | `-seed` | same seed → identical map; another seed → different patterns |
 | `-walls` | add a few side walls in calm sections (Hard and up) |
@@ -81,11 +82,18 @@ is wrong.
 ### Inspect the analysis
 
 ```
-ncart analyze -in song.mp3 [-bpm 128] [-debug analysis.json] [-clicks check.wav]
+ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav]
+              [-beat-test beat.wav]
 ```
 
 Prints BPM, beat grid, onset counts, sections and sustains. `-clicks` writes the song with a click on
 every detected beat (higher click = start of a bar), so you can **hear** whether the grid is right.
+
+**Check the beat before mapping a new song:** `-beat-test` writes the song with a low tock on every
+detected beat and an equally loud high tick halfway between. Nod or clap along to the *music*: if you
+land on the high tick, the detected grid is half a beat off (it happened on both test songs) — pass
+`-half-beat` to `generate` (and `analyze`). Clicks that coincide with a drum hit are hard to hear, so
+judge with the beat test rather than `-clicks` alone.
 
 ## Getting the map into the game
 
@@ -113,9 +121,13 @@ analysis   STFT 2048/512 Hann → spectral flux per band (low/mid/high) → adap
            tempo: autocorrelation + comb + log-Gaussian prior (half/double), then a joint fine search of
            BPM (0.01) and phase over the whole song, so one BPM holds without drift
            grid snapping (1/1, 1/2, 1/4), RMS per beat/bar, calm/normal/intense phrases, drops,
-           sustained tones (rail candidates), accents (low+high together)
-mapper     slots → density per phrase → rails → hand assignment → phrase patterns (arc, zigzag, rise,
-           circle, steps, diamond) with 8-bar motifs → placement under the rules → walls
+           sustained tones (rail candidates), accents (low+high together), a tone per onset
+           (flux-weighted mean log frequency, 100 Hz – 4 kHz)
+mapper     slots → notes per bar (main beats first; bars with a similar rhythm get the same notes)
+           → rails → hand assignment → positions: height from each sound's tone (higher sounds
+           higher), sideways from phrase patterns (arc, zigzag, rise, circle, steps, diamond) with
+           8-bar motifs, move size from loudness, repeated bars repeat their positions within a
+           phrase → placement under the rules → walls
 rules      hand-motion model shared by the mapper and `validate`
 synthfile  .synth read/write (format notes: docs/synth-format.md)
 ```
@@ -145,8 +157,12 @@ Every tuning value lives in one place with comments:
 - `internal/config/config.go`: analysis (bands, onset thresholds, tempo range, sections, sustains) and
   export (Ogg quality, cover size).
 
-Typical adjustments after playing: lower `Density` for a difficulty that feels too busy, or lower
-`MaxHandSpeed` if moves feel rushed. Use `-offset-ms` if every note feels early or late.
+Typical adjustments after playing: lower `Density` for a difficulty that feels too busy (it is applied
+per bar: round(Density × 4) notes), or lower `MaxHandSpeed` if moves feel rushed. If the rhythm keeps
+only main beats where you'd want off-beats, lower the metric weights (`DownbeatWeight` … `HalfWeight`);
+if repeated bars still vary, lower `RhythmSimilarity`. Height and movement: `ToneWeight` / `ToneRangeY`
+(how much and how far height follows the sound), `SpreadMin` / `QuietDB` (how small moves get in quiet
+parts), `RepeatToneOctaves` (how alike two bars must sound to repeat their positions). Use `-offset-ms` if every note feels early or late.
 
 ## Project status
 
@@ -178,6 +194,8 @@ gofmt -l .         # must print nothing
 With [just](https://github.com/casey/just) installed, there are shortcuts (optional):
 
 ```
+just build         # build the binary to ./ncart
+just test          # all tests; extra flags pass through: just test -run Tone -v
 just check         # vet + gofmt (fails if a file needs formatting) + tests; run before committing
 just demo          # map the test song (all difficulties, walls) to out/demo.synth and validate it
 just analyze       # analysis summary, out/analysis.json and click track out/check.wav

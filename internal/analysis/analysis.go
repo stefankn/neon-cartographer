@@ -4,6 +4,7 @@ package analysis
 
 import (
 	"errors"
+	"math"
 	"sort"
 
 	"github.com/stefankn/neon-cartographer/internal/audio"
@@ -16,6 +17,7 @@ type SnappedOnset struct {
 	Time     float64 `json:"time"` // grid time (s)
 	Band     int     `json:"band"`
 	Strength float64 `json:"strength"`
+	Tone     float64 `json:"tone"` // see Onset.Tone
 }
 
 // Accent is a strong simultaneous low+high onset: a two-hand special candidate.
@@ -53,8 +55,18 @@ type Result struct {
 	Accents  []Accent  `json:"accents"`
 }
 
-// Analyze runs the full analysis. bpmOverride > 0 fixes the tempo.
-func Analyze(a *audio.Audio, cfg config.AnalysisConfig, bpmOverride float64) (*Result, error) {
+// Overrides are the user's corrections to the automatic analysis.
+type Overrides struct {
+	// BPM > 0 fixes the tempo.
+	BPM float64
+	// HalfBeat moves the beat grid by half a beat: for songs where the
+	// detected beats fall on what a listener hears as the off-beats
+	// (check with the analyze -beat-test track).
+	HalfBeat bool
+}
+
+// Analyze runs the full analysis.
+func Analyze(a *audio.Audio, cfg config.AnalysisConfig, ov Overrides) (*Result, error) {
 	if a.Rate != cfg.SampleRate {
 		return nil, errors.New("analysis: audio must be resampled to the configured sample rate")
 	}
@@ -75,13 +87,18 @@ func Analyze(a *audio.Audio, cfg config.AnalysisConfig, bpmOverride float64) (*R
 
 	// Tempo and grid.
 	comb := combinedEnvelope(env, cfg.BandWeights, feat.frameRate)
-	r.Tempo = estimateTempo(comb, feat.frameRate, cfg, bpmOverride)
+	r.Tempo = estimateTempo(comb, feat.frameRate, cfg, ov.BPM)
+	if ov.HalfBeat {
+		p := 60 / r.Tempo.BPM
+		r.Tempo.Phase = math.Mod(r.Tempo.Phase+p/2, p)
+		r.Tempo.HalfBeat = true
+	}
 	r.Grid = Grid{BPM: r.Tempo.BPM, FirstBeat: r.Tempo.Phase, BeatsPerBar: cfg.BeatsPerBar}
 	r.Grid.DownbeatIndex = findDownbeat(env[0], feat.frameRate, r.Grid, duration)
 	r.Beats = r.Grid.Beats(duration)
 
 	// Onsets.
-	r.Onsets = detectOnsets(env, feat.frameRate, cfg)
+	r.Onsets = detectOnsets(env, feat.tone, feat.toneWeight, feat.frameRate, cfg)
 	r.Snapped = snapOnsets(r.Onsets, r.Grid, cfg)
 
 	// Energy and sections.
@@ -116,7 +133,7 @@ func snapOnsets(onsets []Onset, g Grid, cfg config.AnalysisConfig) map[int][]Sna
 			}
 			k := key{o.Band, beat}
 			if cur, ok := best[k]; !ok || o.Strength > cur.Strength {
-				best[k] = SnappedOnset{Beat: beat, Time: g.TimeOf(beat), Band: o.Band, Strength: o.Strength}
+				best[k] = SnappedOnset{Beat: beat, Time: g.TimeOf(beat), Band: o.Band, Strength: o.Strength, Tone: o.Tone}
 			}
 		}
 		list := make([]SnappedOnset, 0, len(best))

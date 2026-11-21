@@ -167,3 +167,30 @@ func TestEncodeOggPadsAndDecodes(t *testing.T) {
 	}
 	t.Logf("encoder %s, pad measured %.4f s", enc, lag)
 }
+
+func TestMixBeatTest(t *testing.T) {
+	const rate = 8000
+	silent := make([]float32, rate) // 1 s
+	out := MixBeatTest(silent, rate, []float64{0.1, 0.6}, 0.5)
+	peak := func(from, to float64) float64 {
+		var m float64
+		for i := int(from * rate); i < int(to*rate); i++ {
+			m = math.Max(m, math.Abs(float64(out[i])))
+		}
+		return m
+	}
+	for _, at := range []float64{0.1, 0.35, 0.6, 0.85} { // beats and halfway points
+		if p := peak(at, at+0.01); p < 0.1 {
+			t.Errorf("no tone at %.2f s (peak %.3f)", at, p)
+		}
+	}
+	for _, at := range []float64{0.2, 0.5} {
+		if p := peak(at, at+0.05); p > 0.01 {
+			t.Errorf("unexpected sound at %.2f s (peak %.3f)", at, p)
+		}
+	}
+	low, high := zeroCrossingFreq(out[int(0.1*rate):int(0.115*rate)], rate), zeroCrossingFreq(out[int(0.35*rate):int(0.365*rate)], rate)
+	if low >= high {
+		t.Errorf("beat tone %.0f Hz not lower than half-beat tone %.0f Hz", low, high)
+	}
+}

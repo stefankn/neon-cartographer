@@ -240,3 +240,37 @@ func MixClicks(samples []float32, rate int, times []float64, accent []bool) []fl
 	}
 	return out
 }
+
+// Beat-test tones: equally loud, so neither stands out by volume.
+const (
+	beatTestLowHz  = 700  // on the detected beats
+	beatTestHighHz = 2500 // halfway between them
+	beatTestAmp    = 0.4
+)
+
+// MixBeatTest returns samples (scaled to 0.6) with a low tock at every
+// beat time and an equally loud high tick halfway to the next beat
+// (period seconds apart). Nodding along to the music shows whether the
+// detected beats (low) or the half-beats between them (high) are the beat a
+// listener feels.
+func MixBeatTest(samples []float32, rate int, beats []float64, period float64) []float32 {
+	out := make([]float32, len(samples))
+	for i, s := range samples {
+		out[i] = 0.6 * s
+	}
+	n := int(0.03 * float64(rate))
+	add := func(t, freq float64) {
+		start := int(t * float64(rate))
+		for i := 0; i < n; i++ {
+			if j := start + i; j >= 0 && j < len(out) {
+				x := float64(i) / float64(rate)
+				out[j] += float32(beatTestAmp * math.Sin(2*math.Pi*freq*x) * math.Exp(-x/0.008))
+			}
+		}
+	}
+	for _, b := range beats {
+		add(b, beatTestLowHz)
+		add(b+period/2, beatTestHighHz)
+	}
+	return out
+}

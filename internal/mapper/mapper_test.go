@@ -1,9 +1,11 @@
 package mapper
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/stefankn/neon-cartographer/internal/analysis"
@@ -287,6 +289,268 @@ func TestWalls(t *testing.T) {
 				if w.Beat >= n.Beat-cfg.WallClearBeats && w.Beat <= end+cfg.WallClearBeats {
 					t.Errorf("%s: wall at beat %v too close to note at %v", d.Name, w.Beat, n.Beat)
 				}
+			}
+		}
+	}
+}
+
+// selectedByBar runs the selection for one difficulty and returns the
+// selected positions per bar (1/4 beats from the bar start) and each bar's
+// section label. Bars cut by the lead-in or the song end are left out.
+func selectedByBar(r *analysis.Result, dc config.DifficultyConfig) (map[int][]int, map[int]string) {
+	cfg := config.DefaultMapper()
+	tl := NewTimeline(r.Grid, 0, 0)
+	slots := buildSlots(r, tl, dc, cfg)
+	first, last := math.MaxInt, math.MinInt
+	for _, s := range slots {
+		b, _ := barOf(r.Grid, s.grid)
+		first, last = min(first, b), max(last, b)
+	}
+	pos, label := map[int][]int{}, map[int]string{}
+	for _, s := range selectByBars(slots, r, dc, cfg) {
+		b, p := barOf(r.Grid, s.grid)
+		if b == first || b == last {
+			continue
+		}
+		pos[b] = append(pos[b], p)
+		label[b] = s.label
+	}
+	return pos, label
+}
+
+func TestRepeatedBarsGetSameRhythm(t *testing.T) {
+	r := richResult()
+	// same rhythm in every bar, strengths varied by up to ±20 %
+	for sub, os := range r.Snapped {
+		for i := range os {
+			r.Snapped[sub][i].Strength *= 1 + 0.2*math.Sin(os[i].Beat*7.3)
+		}
+	}
+	cfg := config.DefaultMapper()
+	for _, name := range allDiffs {
+		dc, _ := cfg.Difficulty(name)
+		pos, label := selectedByBar(r, dc)
+		want := map[string]string{}
+		for b, ps := range pos {
+			got := fmt.Sprint(ps)
+			w, ok := want[label[b]]
+			if !ok {
+				want[label[b]] = got
+				continue
+			}
+			if got != w {
+				t.Errorf("%s bar %d (%s): rhythm %s, other %s bars %s", name, b, label[b], got, label[b], w)
+			}
+		}
+		t.Logf("%-6s %v", name, want)
+	}
+}
+
+func TestBarBudgetIsEven(t *testing.T) {
+	r := richResult()
+	cfg := config.DefaultMapper()
+	for _, name := range allDiffs {
+		dc, _ := cfg.Difficulty(name)
+		pos, label := selectedByBar(r, dc)
+		for b, ps := range pos {
+			k := max(1, int(math.Round(dc.Density[label[b]]*float64(r.Grid.BeatsPerBar))))
+			if len(ps) != k {
+				t.Errorf("%s bar %d (%s): %d notes, want %d", name, b, label[b], len(ps), k)
+			}
+		}
+	}
+}
+
+func TestMainBeatsFirst(t *testing.T) {
+	g := analysis.Grid{BPM: 120, FirstBeat: 0.25, BeatsPerBar: 4}
+	r := &analysis.Result{Grid: g, Duration: 40, SoundStart: 0.25, SoundEnd: g.TimeOf(64), Snapped: map[int][]analysis.SnappedOnset{}}
+	r.Phrases = []analysis.Phrase{{StartBar: 0, EndBar: 16, Start: g.TimeOf(0), End: g.TimeOf(64), Label: "calm", SectionStart: true}}
+	for q := 0; q < 64*2; q++ { // equal onsets on every 1/2 beat
+		b := float64(q) / 2
+		for _, sub := range []int{2, 4} {
+			r.Snapped[sub] = append(r.Snapped[sub], analysis.SnappedOnset{Beat: b, Time: g.TimeOf(b), Band: 1, Strength: 0.5})
+		}
+	}
+	dc := config.DifficultyConfig{Subdivision: 2, MinGapBeats: 0.5, Density: map[string]float64{"calm": 0.5}}
+	pos, _ := selectedByBar(r, dc)
+	if len(pos) == 0 {
+		t.Fatal("no bars selected")
+	}
+	for b, ps := range pos {
+		if fmt.Sprint(ps) != "[0 8]" {
+			t.Errorf("bar %d: positions %v, want beats 1 and 3 [0 8]", b, ps)
+		}
+	}
+}
+
+// musicResult is richResult with tones and loudness: every onset's tone
+// steps up through four pitches bar by bar (1, 2, 3, 4, 1, …), calm
+// phrases are quiet (−15 dB) and intense phrases loud (0 dB).
+func musicResult(toneSteps bool) *analysis.Result {
+	r := richResult()
+	for sub := range r.Snapped {
+		for i := range r.Snapped[sub] {
+			o := &r.Snapped[sub][i]
+			o.Tone = 10
+			if toneSteps {
+				o.Tone = 8 + float64(int(o.Beat)/4%4)
+			}
+		}
+	}
+	for b := 0; b < 12*16; b++ {
+		db := -15.0
+		if r.Phrases[b/16].Label == "intense" {
+			db = 0
+		}
+		r.BeatEnergyDB = append(r.BeatEnergyDB, db)
+	}
+	return r
+}
+
+func genFrom(t *testing.T, r *analysis.Result) (*Map, Timeline) {
+	t.Helper()
+	tl := NewTimeline(r.Grid, 0, 0)
+	m, err := Generate(r, tl, Options{Difficulties: allDiffs, Seed: 42}, config.DefaultMapper())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, tl
+}
+
+// spearman returns the rank correlation of a and b (ties get the mean rank).
+func spearman(a, b []float64) float64 {
+	rank := func(v []float64) []float64 {
+		idx := make([]int, len(v))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.Slice(idx, func(i, j int) bool { return v[idx[i]] < v[idx[j]] })
+		r := make([]float64, len(v))
+		for i := 0; i < len(idx); {
+			j := i
+			for j < len(idx) && v[idx[j]] == v[idx[i]] {
+				j++
+			}
+			for k := i; k < j; k++ {
+				r[idx[k]] = float64(i+j-1) / 2
+			}
+			i = j
+		}
+		return r
+	}
+	ra, rb := rank(a), rank(b)
+	var ma, mb float64
+	for i := range ra {
+		ma += ra[i]
+		mb += rb[i]
+	}
+	ma /= float64(len(ra))
+	mb /= float64(len(rb))
+	var c, va, vb float64
+	for i := range ra {
+		c += (ra[i] - ma) * (rb[i] - mb)
+		va += (ra[i] - ma) * (ra[i] - ma)
+		vb += (rb[i] - mb) * (rb[i] - mb)
+	}
+	return c / math.Sqrt(va*vb)
+}
+
+func TestHeightFollowsTone(t *testing.T) {
+	r := musicResult(true)
+	m, tl := genFrom(t, r)
+	for _, d := range m.Difficulties {
+		for _, typ := range []synthfile.NoteType{synthfile.LeftHanded, synthfile.RightHanded} {
+			var tone, y []float64
+			for _, n := range d.Notes {
+				if n.Type != typ || len(n.Rail) > 0 {
+					continue
+				}
+				gb := n.Beat - tl.SongBeat(0)
+				tone = append(tone, float64(int(gb)/4%4))
+				y = append(y, n.Y)
+			}
+			if c := spearman(tone, y); c < 0.5 {
+				t.Errorf("%s %v: tone/height rank correlation %.2f, want ≥ 0.5", d.Name, typ, c)
+			}
+		}
+	}
+}
+
+func TestQuietPartsMoveLess(t *testing.T) {
+	r := musicResult(true)
+	m, tl := genFrom(t, r)
+	g := config.DefaultMapper().Geometry
+	for _, d := range m.Difficulties {
+		sum := map[string]float64{}
+		cnt := map[string]float64{}
+		for _, n := range d.Notes {
+			if n.Type != synthfile.LeftHanded && n.Type != synthfile.RightHanded {
+				continue
+			}
+			p := phraseAt(r.Phrases, tl.SongBeatTime(n.Beat)-tl.PadSec)
+			lab := r.Phrases[p].Label
+			sum[lab] += math.Hypot(math.Abs(n.X)-g.HomeX, n.Y-g.HomeY)
+			cnt[lab]++
+		}
+		calm, intense := sum["calm"]/cnt["calm"], sum["intense"]/cnt["intense"]
+		t.Logf("%-6s mean distance from home: calm %.2f, intense %.2f cells", d.Name, calm, intense)
+		if calm >= intense {
+			t.Errorf("%s: quiet (calm) notes not closer to home than loud ones: %.2f vs %.2f", d.Name, calm, intense)
+		}
+	}
+}
+
+func TestRepeatedBarsRepeatPositions(t *testing.T) {
+	r := musicResult(false) // same rhythm and tone in every bar
+	m, tl := genFrom(t, r)
+	for _, d := range m.Difficulties {
+		type key struct {
+			pos int
+			typ synthfile.NoteType
+		}
+		bars := map[int]map[key][2]float64{}
+		for _, n := range d.Notes {
+			if (n.Type != synthfile.LeftHanded && n.Type != synthfile.RightHanded) || len(n.Rail) > 0 {
+				continue
+			}
+			b, p := barOf(r.Grid, n.Beat-tl.SongBeat(0))
+			if bars[b] == nil {
+				bars[b] = map[key][2]float64{}
+			}
+			bars[b][key{p, n.Type}] = [2]float64{n.X, n.Y}
+		}
+		same, total := 0, 0
+		for b, notes := range bars {
+			prev, ok := bars[b-1]
+			if !ok || (b*4)/16 != ((b-1)*4)/16 { // previous bar in the same phrase only
+				continue
+			}
+			for k, xy := range notes {
+				if pxy, ok := prev[k]; ok {
+					total++
+					if pxy == xy {
+						same++
+					}
+				}
+			}
+		}
+		t.Logf("%-6s %d of %d notes repeat the previous bar's position", d.Name, same, total)
+		if total == 0 || float64(same) < 0.9*float64(total) {
+			t.Errorf("%s: only %d of %d notes in repeated bars repeat their position", d.Name, same, total)
+		}
+	}
+}
+
+func TestMirrorFlipsSideways(t *testing.T) {
+	cfg := config.DefaultMapper()
+	s := slot{loud: 1, toneN: 0.5}
+	for pi := range patterns {
+		for k := range 8 {
+			a, _ := phrasePlan{pattern: pi}.target(k, 8, 1, s, cfg)
+			b, _ := phrasePlan{pattern: pi, mirror: true}.target(k, 8, 1, s, cfg)
+			dx, _ := patterns[pi].at(k, float64(k)/7)
+			if math.Abs(dx) >= 1 && (a-cfg.Geometry.HomeX)*(b-cfg.Geometry.HomeX) >= 0 {
+				t.Errorf("%s note %d: x %v and mirrored %v on the same side of home", patterns[pi].name, k, a, b)
 			}
 		}
 	}

@@ -51,7 +51,7 @@ func bandOnsets(t *testing.T, g *signal) map[int][]float64 {
 		env[b] = normalize(f.flux[b])
 	}
 	out := map[int][]float64{}
-	for _, o := range detectOnsets(env, f.frameRate, cfg) {
+	for _, o := range detectOnsets(env, f.tone, f.toneWeight, f.frameRate, cfg) {
 		out[o.Band] = append(out[o.Band], o.Time)
 	}
 	return out
@@ -333,6 +333,80 @@ func TestAccents(t *testing.T) {
 	for _, a := range r.Accents {
 		if math.Mod(a.Beat, 8) != 0 {
 			t.Errorf("accent at beat %v, want multiples of 8", a.Beat)
+		}
+	}
+}
+
+func TestOnsetToneFollowsPitch(t *testing.T) {
+	g := newSignal(12)
+	freqs := []float64{200, 400, 800, 1600}
+	start := func(note int) float64 { return 1 + float64(note)*1.2 }
+	for i, f := range freqs { // each pitch twice
+		for rep := range 2 {
+			t0 := start(2*i + rep)
+			g.tone(f, t0, t0+0.6, 0.5)
+		}
+	}
+	r := analyze(t, g, 120)
+	prev := 0.0
+	for i, f := range freqs {
+		var sum, n float64
+		for rep := range 2 {
+			t0 := start(2*i + rep)
+			for _, o := range r.Onsets {
+				if o.Tone > 0 && o.Time >= t0-0.05 && o.Time <= t0+0.1 {
+					sum += o.Tone
+					n++
+				}
+			}
+		}
+		if n == 0 {
+			t.Fatalf("%v Hz: no onset with a tone", f)
+		}
+		got := sum / n
+		t.Logf("%5.0f Hz: tone %.2f (log2 f = %.2f) from %d onsets", f, got, math.Log2(f), int(n))
+		if math.Abs(got-math.Log2(f)) > 0.75 {
+			t.Errorf("%v Hz: tone %.2f, want ≈ %.2f", f, got, math.Log2(f))
+		}
+		if got <= prev {
+			t.Errorf("%v Hz: tone %.2f not above the lower pitch's %.2f", f, got, prev)
+		}
+		prev = got
+	}
+}
+
+func TestHalfBeatOverride(t *testing.T) {
+	g := newSignal(30)
+	beatsOf(120, 0.3, 30, func(_ int, tm float64) { g.kick(tm, 0.8) })
+	a := g.audio()
+	cfg := config.Default().Analysis
+	plain, err := Analyze(a, cfg, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	half, err := Analyze(a, cfg, Overrides{HalfBeat: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := plain.Grid.Period()
+	if half.Tempo.BPM != plain.Tempo.BPM || !half.Tempo.HalfBeat || plain.Tempo.HalfBeat {
+		t.Fatalf("BPM %v/%v, HalfBeat %v/%v", plain.Tempo.BPM, half.Tempo.BPM, plain.Tempo.HalfBeat, half.Tempo.HalfBeat)
+	}
+	if e := phaseError(half.Grid.FirstBeat, plain.Grid.FirstBeat+p/2, p); e > 1e-9 {
+		t.Errorf("first beat %.4f, want %.4f + half a beat", half.Grid.FirstBeat, plain.Grid.FirstBeat)
+	}
+	if half.Grid.FirstBeat < 0 || half.Grid.FirstBeat >= p {
+		t.Errorf("first beat %.4f outside [0, %.4f)", half.Grid.FirstBeat, p)
+	}
+	// the kicks now sit between the grid's beats: none on the 1/1 grid,
+	// all on half-beat positions of the 1/2 grid
+	if n := len(half.Snapped[1]); n > 0 {
+		t.Errorf("%d onsets still on whole beats", n)
+	}
+	for _, o := range half.Snapped[2] {
+		if f := o.Beat - math.Floor(o.Beat); math.Abs(f-0.5) > 1e-9 {
+			t.Errorf("onset at grid beat %v, want a half-beat position", o.Beat)
+			break
 		}
 	}
 }

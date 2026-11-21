@@ -25,9 +25,27 @@ type MapperConfig struct {
 	// (difficulties with Pairs enabled).
 	PairStrength float64
 
-	// MetricWeight is added to a slot's score by position in the bar, so
-	// strong beats win over off-beats at equal onset strength.
-	DownbeatWeight, BeatWeight, HalfWeight, QuarterWeight float64
+	// Metric weights are added to a slot's score by position in the bar so
+	// main beats are kept before off-beats: beat 1 (Downbeat), beat 3 in
+	// 4/4 (MidBar), the other beats (Beat), half-beat off-beats (Half),
+	// 1/4 positions (Quarter). The steps are small next to onset strength
+	// (0..1 per band): a clearly louder off-beat (syncopation) still wins
+	// over a weak beat, but similar sounds go to the stronger position.
+	DownbeatWeight, MidBarWeight, BeatWeight, HalfWeight, QuarterWeight float64
+
+	// Rhythm: each bar's positions are ranked by their mean onset strength
+	// over all bars with a similar rhythm, so a repeating musical figure
+	// becomes a repeating note figure. RhythmMinStrength: total onset
+	// strength for a position to count in a bar's rhythm signature
+	// (strength per position). RhythmSimilarity: cosine similarity of two
+	// signatures for one bar to count towards the other's ranking, and for
+	// a bar to start from the order of an earlier, similar bar.
+	// RhythmTieMargin: in that case a position only moves ahead of another
+	// when its score is higher by more than this, so near ties resolve the
+	// same way in every repetition.
+	RhythmMinStrength float64
+	RhythmSimilarity  float64
+	RhythmTieMargin   float64
 
 	// Specials: BothHandsSpecial notes are placed at (SpecialX, SpecialY).
 	SpecialX, SpecialY float64
@@ -47,6 +65,26 @@ type MapperConfig struct {
 	// WallClearBeats: no note (or rail) within ± this many beats of a wall.
 	WallEveryPhrases int
 	WallClearBeats   float64
+
+	// Positions follow the music (patterns.go):
+	// ToneWeight: share of a note's height that comes from its tone (the
+	// rest from the phrase pattern). ToneRangeY: cells above/below HomeY for
+	// the highest/lowest tones. Tones are normalised per song between the
+	// ToneLowQuantile and ToneHighQuantile tones of the selected notes, so
+	// a few outliers don't squash the range.
+	// SpreadMin: move size (pattern offsets and tone height) at QuietDB or
+	// quieter, as a fraction of the full size reached at the loudest bar;
+	// in between it grows linearly with the beat's level in dB.
+	ToneWeight                        float64
+	ToneRangeY                        float64
+	ToneLowQuantile, ToneHighQuantile float64
+	SpreadMin                         float64
+	QuietDB                           float64
+	// RepeatToneOctaves: a bar repeats the note positions of an earlier,
+	// rhythmically similar bar of its phrase only if their mean tone
+	// differs by at most this much (octaves); otherwise its notes follow
+	// their own tones, so a melody over a steady groove still moves.
+	RepeatToneOctaves float64
 
 	// PlaceSearchRadius: when a note's pattern position breaks a rule, the
 	// nearest grid cell within this radius that satisfies every rule is
@@ -82,6 +120,7 @@ type DifficultyConfig struct {
 	StrongGapBeats float64
 	StrongQuantile float64
 	// Density: target notes per beat by section label (calm/normal/intense).
+	// Applied per bar: round(Density × beats per bar) notes, at least 1.
 	Density map[string]float64
 	// MaxHandSpeed in metres per second between consecutive touches of
 	// one hand (plus Geometry.ReachSlackM).
@@ -158,7 +197,11 @@ func DefaultMapper() MapperConfig {
 		BandDominance: 1.5,
 		PairStrength:  0.6,
 
-		DownbeatWeight: 0.6, BeatWeight: 0.4, HalfWeight: 0.2, QuarterWeight: 0,
+		DownbeatWeight: 0.9, MidBarWeight: 0.75, BeatWeight: 0.6, HalfWeight: 0.3, QuarterWeight: 0,
+
+		RhythmMinStrength: 0.3,
+		RhythmTieMargin:   0.15,
+		RhythmSimilarity:  0.75,
 
 		SpecialX: 0, SpecialY: 1,
 
@@ -169,6 +212,11 @@ func DefaultMapper() MapperConfig {
 
 		WallEveryPhrases: 2,
 		WallClearBeats:   1,
+
+		ToneWeight: 0.7, ToneRangeY: 3.5,
+		ToneLowQuantile: 0.1, ToneHighQuantile: 0.9,
+		SpreadMin: 0.3, QuietDB: -18,
+		RepeatToneOctaves: 0.25,
 
 		PlaceSearchRadius: 6,
 	}

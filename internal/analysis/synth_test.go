@@ -86,7 +86,7 @@ func beatsOf(bpm, phase, seconds float64, fn func(k int, t float64)) {
 
 func analyze(t *testing.T, g *signal, bpmOverride float64) *Result {
 	t.Helper()
-	r, err := Analyze(g.audio(), config.Default().Analysis, bpmOverride)
+	r, err := Analyze(g.audio(), config.Default().Analysis, Overrides{BPM: bpmOverride})
 	if err != nil {
 		t.Fatal(err)
 	}

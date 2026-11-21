@@ -1,7 +1,7 @@
 // Command ncart generates Synth Riders maps from music files.
 //
 //	ncart [generate] -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert] ...
-//	ncart analyze -in song.mp3 [-bpm 128] [-debug analysis.json] [-clicks check.wav]
+//	ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav] [-beat-test beat.wav]
 //	ncart validate song.synth [-difficulty hard]
 package main
 
@@ -26,8 +26,10 @@ const usage = `ncart — generate Synth Riders maps from music files
 
 Usage:
   ncart [generate] -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert]
-                   [-title ".."] [-artist ".."] [-mapper neon-cartographer] [-bpm 126] [-offset-ms 0] [-seed 42] [-walls]
-  ncart analyze -in song.mp3 [-bpm 128] [-debug analysis.json] [-clicks check.wav]
+                   [-title ".."] [-artist ".."] [-mapper neon-cartographer] [-bpm 126] [-half-beat] [-offset-ms 0]
+                   [-seed 42] [-walls]
+  ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav]
+                [-beat-test beat.wav]
   ncart validate song.synth [-difficulty hard]
 
 Commands:
@@ -70,8 +72,10 @@ func runAnalyze(args []string) error {
 	fs := flag.NewFlagSet("analyze", flag.ExitOnError)
 	in := fs.String("in", "", "input audio file (mp3, ogg, wav; other formats via ffmpeg)")
 	bpm := fs.Float64("bpm", 0, "override tempo detection with this BPM")
+	halfBeat := fs.Bool("half-beat", false, "move the beat grid by half a beat (if -beat-test shows the beat on the high tick)")
 	debug := fs.String("debug", "", "write the full analysis as JSON to this file")
 	clicks := fs.String("clicks", "", "write the song mixed with beat clicks to this WAV file (higher click = bar start)")
+	beatTest := fs.String("beat-test", "", "write the song with a low tock on each detected beat and a high tick halfway between to this WAV file")
 	fs.Parse(args)
 	if *in == "" {
 		fs.Usage()
@@ -86,7 +90,7 @@ func runAnalyze(args []string) error {
 	}
 	tDecode := time.Since(t0)
 	t1 := time.Now()
-	r, err := analysis.Analyze(a, cfg.Analysis, *bpm)
+	r, err := analysis.Analyze(a, cfg.Analysis, analysis.Overrides{BPM: *bpm, HalfBeat: *halfBeat})
 	if err != nil {
 		return err
 	}
@@ -116,6 +120,19 @@ func runAnalyze(args []string) error {
 		}
 		fmt.Println("Wrote click track to", *clicks)
 	}
+	if *beatTest != "" {
+		mixed := audio.MixBeatTest(a.Samples, a.Rate, r.Beats, r.Grid.Period())
+		if err := audio.WriteWAV(*beatTest, mixed, a.Rate); err != nil {
+			return err
+		}
+		fmt.Println("Wrote beat test to", *beatTest)
+		fmt.Println("  Nod or clap along to the music. On the low tock: the beat grid is right.")
+		if r.Tempo.HalfBeat {
+			fmt.Println("  On the high tick: the grid is half a beat off; run without -half-beat.")
+		} else {
+			fmt.Println("  On the high tick: the grid is half a beat off; use -half-beat (generate and analyze).")
+		}
+	}
 	return nil
 }
 
@@ -132,8 +149,12 @@ func printSummary(path string, a *audio.Audio, r *analysis.Result) {
 	} else {
 		fmt.Printf("Tempo:       %.2f BPM (confidence %.2f; next-best unrelated tempo %.1f)\n", r.Tempo.BPM, r.Tempo.Confidence, r.Tempo.AltBPM)
 	}
-	fmt.Printf("Beat grid:   first beat at %.3f s, bars start on beat %d, %d beats, %d bars\n",
-		r.Grid.FirstBeat, r.Grid.DownbeatIndex, len(r.Beats), len(r.Bars))
+	shifted := ""
+	if r.Tempo.HalfBeat {
+		shifted = " (moved half a beat by -half-beat)"
+	}
+	fmt.Printf("Beat grid:   first beat at %.3f s%s, bars start on beat %d, %d beats, %d bars\n",
+		r.Grid.FirstBeat, shifted, r.Grid.DownbeatIndex, len(r.Beats), len(r.Bars))
 	fmt.Printf("Sound:       %s – %s\n", mmss(r.SoundStart), mmss(r.SoundEnd))
 
 	perBand := func(count func(band int) int) string {
@@ -203,6 +224,7 @@ func runGenerate(args []string) error {
 	artist := fs.String("artist", "", "artist (default: from tags)")
 	mapperName := fs.String("mapper", "neon-cartographer", "mapper name shown in the game")
 	bpm := fs.Float64("bpm", 0, "override tempo detection with this BPM")
+	halfBeat := fs.Bool("half-beat", false, "move the beat grid by half a beat (if analyze -beat-test shows the beat on the high tick)")
 	offsetMs := fs.Float64("offset-ms", 0, "move all notes later (positive) or earlier (negative) by this many ms")
 	seed := fs.Int64("seed", 42, "random seed (output is deterministic for a given seed)")
 	noCover := fs.Bool("no-cover", false, "don't embed the song's cover art")
@@ -220,7 +242,7 @@ func runGenerate(args []string) error {
 	start := time.Now()
 	rep, err := generate.Run(generate.Options{
 		In: *in, Out: *out, Difficulties: names, Title: *title, Artist: *artist, Mapper: *mapperName,
-		BPM: *bpm, OffsetMs: *offsetMs, Seed: *seed, NoCover: *noCover, Walls: *walls,
+		BPM: *bpm, HalfBeat: *halfBeat, OffsetMs: *offsetMs, Seed: *seed, NoCover: *noCover, Walls: *walls,
 	}, config.Default())
 	if err != nil {
 		if rep != nil && len(rep.Validation) > 0 {
@@ -234,7 +256,11 @@ func runGenerate(args []string) error {
 	if r.Tempo.Overridden {
 		fmt.Print(" (from -bpm)")
 	}
-	fmt.Printf(", first beat at %.3f s\n", r.Grid.FirstBeat)
+	fmt.Printf(", first beat at %.3f s", r.Grid.FirstBeat)
+	if r.Tempo.HalfBeat {
+		fmt.Print(" (moved half a beat by -half-beat)")
+	}
+	fmt.Println()
 	fmt.Printf("Audio:     %s, %.0f ms silence prepended so beats land on the grid (Offset 0)\n",
 		rep.Encoder, rep.Timeline.PadSec*1000)
 	fmt.Printf("Alignment: decoder shift %.1f ms corrected, residual %.2f ms (correlation %.2f)\n",

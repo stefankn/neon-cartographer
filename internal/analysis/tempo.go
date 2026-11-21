@@ -14,6 +14,7 @@ type TempoEstimate struct {
 	Confidence float64 `json:"confidence"` // 0..1, how much the winner stands out
 	AltBPM     float64 `json:"altBpm"`     // best candidate not within 4% of BPM or of its octaves
 	Overridden bool    `json:"overridden"` // BPM was given by the user
+	HalfBeat   bool    `json:"halfBeat"`   // phase moved half a beat by the user (-half-beat)
 }
 
 // combinedEnvelope is the weighted sum of normalised band envelopes with

@@ -12,6 +12,9 @@ type Onset struct {
 	Time     float64 `json:"time"` // seconds from audio start
 	Band     int     `json:"band"` // index into Result.Bands
 	Strength float64 `json:"strength"`
+	// Tone: flux-weighted mean log2 frequency (Hz) at the onset, 0 if
+	// unknown. Higher = brighter / higher-pitched sound.
+	Tone float64 `json:"tone"`
 }
 
 // normalize scales a copy of x so its maximum is 1 (all zeros stay zero).
@@ -89,12 +92,22 @@ func pickPeaks(env []float64, frameRate float64, cfg config.AnalysisConfig) []pe
 	return peaks
 }
 
-// detectOnsets runs peak picking on each band's normalised flux.
-func detectOnsets(env [][]float64, frameRate float64, cfg config.AnalysisConfig) []Onset {
+// detectOnsets runs peak picking on each band's normalised flux. Each
+// onset's Tone is taken from the frame within ±1 of the peak with the most
+// flux in the tone range.
+func detectOnsets(env [][]float64, tone, toneWeight []float64, frameRate float64, cfg config.AnalysisConfig) []Onset {
 	var out []Onset
 	for b, e := range env {
 		for _, p := range pickPeaks(e, frameRate, cfg) {
-			out = append(out, Onset{Time: p.frame/frameRate + cfg.OnsetLatencySec, Band: b, Strength: p.strength})
+			o := Onset{Time: p.frame/frameRate + cfg.OnsetLatencySec, Band: b, Strength: p.strength}
+			i := int(math.Round(p.frame))
+			best := 0.0
+			for j := max(0, i-1); j <= min(len(tone)-1, i+1); j++ {
+				if toneWeight[j] > best {
+					best, o.Tone = toneWeight[j], tone[j]
+				}
+			}
+			out = append(out, o)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time < out[j].Time })

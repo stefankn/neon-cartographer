@@ -25,6 +25,7 @@ type Options struct {
 	Title, Artist string   // empty: from tags, else file name
 	Mapper        string
 	BPM           float64 // 0: detect
+	HalfBeat      bool    // move the beat grid by half a beat
 	OffsetMs      float64 // moves notes later relative to the music
 	Seed          int64
 	NoCover       bool
@@ -57,7 +58,7 @@ func Run(o Options, cfg config.Config) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := analysis.Analyze(src, cfg.Analysis, o.BPM)
+	r, err := analysis.Analyze(src, cfg.Analysis, analysis.Overrides{BPM: o.BPM, HalfBeat: o.HalfBeat})
 	if err != nil {
 		return nil, err
 	}

@@ -44,6 +44,10 @@ type AnalysisConfig struct {
 	// a drum into other bands (at γ=100 a kick shows up in the high band at
 	// ~15% strength; at γ=10 at ~5%).
 	LogCompression float64
+	// ToneLowHz/ToneHighHz: frequency range of an onset's tone (the
+	// flux-weighted mean log2 frequency of what just started sounding),
+	// used to place higher sounds higher.
+	ToneLowHz, ToneHighHz float64
 	// OnsetLatencySec is added to detected onset and beat times. Frames are
 	// centred, so the flux peaks ~1 hop before the true attack (measured
 	// ≈ 12 ms on synthetic clicks and kicks).
@@ -135,6 +139,8 @@ func Default() Config {
 			{"high", 2000, 16000},
 		},
 		LogCompression:   10,
+		ToneLowHz:        100,
+		ToneHighHz:       4000,
 		OnsetLatencySec:  0.012,
 		MedianWindowSec:  0.5,
 		ThresholdMult:    1.5,

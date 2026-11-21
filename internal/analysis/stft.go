@@ -79,6 +79,10 @@ type bandFeatures struct {
 	// flux[b][i]: half-wave rectified increase of log(1+γ|X|) summed over
 	// band b's bins between frames i-1 and i.
 	flux [][]float64
+	// tone[i]: flux-weighted mean log2 frequency of the bins in the tone
+	// range whose log magnitude rose between frames i-1 and i (0 if none);
+	// toneWeight[i] is that flux sum.
+	tone, toneWeight []float64
 }
 
 // computeBandFeatures streams the STFT once and keeps only band features,
@@ -103,10 +107,19 @@ func computeBandFeatures(samples []float32, cfg config.AnalysisConfig) bandFeatu
 		}
 	}
 
+	tlo := max(1, int(math.Ceil(cfg.ToneLowHz*float64(cfg.WindowSize)/float64(cfg.SampleRate))))
+	thi := min(nBins-1, int(math.Floor(cfg.ToneHighHz*float64(cfg.WindowSize)/float64(cfg.SampleRate))))
+	logFreq := make([]float64, nBins)
+	for k := 1; k < nBins; k++ {
+		logFreq[k] = math.Log2(BinFreq(k, cfg.WindowSize, cfg.SampleRate))
+	}
+
 	f := bandFeatures{
-		frameRate: float64(cfg.SampleRate) / float64(cfg.HopSize),
-		energy:    make([][]float64, nb),
-		flux:      make([][]float64, nb),
+		frameRate:  float64(cfg.SampleRate) / float64(cfg.HopSize),
+		energy:     make([][]float64, nb),
+		flux:       make([][]float64, nb),
+		tone:       make([]float64, nFrames),
+		toneWeight: make([]float64, nFrames),
 	}
 	for b := range nb {
 		f.energy[b] = make([]float64, nFrames)
@@ -132,6 +145,18 @@ func computeBandFeatures(samples []float32, cfg config.AnalysisConfig) bandFeatu
 			}
 			f.energy[b][i] = e
 			f.flux[b][i] = fl
+		}
+		if i > 0 {
+			var w, wf float64
+			for k := tlo; k <= thi; k++ {
+				if d := logCur[k] - logPrev[k]; d > 0 {
+					w += d
+					wf += d * logFreq[k]
+				}
+			}
+			if w > 0 {
+				f.tone[i], f.toneWeight[i] = wf/w, w
+			}
 		}
 		logPrev, logCur = logCur, logPrev
 	}

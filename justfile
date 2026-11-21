@@ -6,6 +6,14 @@ song := "testdata/bonobo-drift.mp3"
 default:
     @just --list
 
+# Build the ncart binary into ./ncart
+build:
+    go build -o ncart ./cmd/ncart
+
+# Run all tests; extra go test flags pass through, e.g. `just test -run Tone -v`
+test *args:
+    go test ./... {{args}}
+
 # vet, formatting (fails if any file needs gofmt) and all tests — run before committing
 check:
     go vet ./...

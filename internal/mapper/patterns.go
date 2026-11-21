@@ -5,6 +5,7 @@ import (
 	"math/rand"
 
 	"github.com/stefankn/neon-cartographer/internal/analysis"
+	"github.com/stefankn/neon-cartographer/internal/config"
 )
 
 // pattern gives the offset of the k-th note of one hand in a phrase from
@@ -47,12 +48,12 @@ var patterns = []pattern{
 // phrasePlan is the pattern used in one phrase.
 type phrasePlan struct {
 	pattern int
-	mirror  bool // flip vertically
+	mirror  bool // flip the sideways offsets (outward ↔ inward)
 }
 
 // planPhrases assigns a pattern to every phrase. Each section label gets a
 // motif of two patterns (A, B) chosen at its first appearance; phrases with
-// that label then follow A, A′, B, B′, A, … where ′ is the vertical mirror.
+// that label then follow A, A′, B, B′, A, … where ′ is the sideways mirror.
 // So every 8 bars repeat a shape, and a returning section returns with its
 // own motif.
 func planPhrases(phrases []analysis.Phrase, rng *rand.Rand) []phrasePlan {
@@ -74,16 +75,28 @@ func planPhrases(phrases []analysis.Phrase, rng *rand.Rand) []phrasePlan {
 	return out
 }
 
-// position returns the grid position for the k-th of n notes of a hand
-// with the given sign (−1 left, +1 right) in a phrase.
-func (pp phrasePlan) position(k, n int, sign, homeX, homeY float64) (x, y float64) {
+// target returns the wanted grid position for the k-th of n notes of a
+// hand (sign −1 left, +1 right) in a phrase, for slot s:
+//   - x: the phrase pattern's sideways offset (mirrored inward on every
+//     other phrase of a label), scaled by the move size;
+//   - y: mostly the slot's tone (higher sounds higher), partly the pattern's
+//     vertical offset, scaled by the move size;
+//   - move size: SpreadMin in quiet parts up to 1 at the loudest.
+//
+// Slots without a tone use the pattern's vertical offset alone.
+func (pp phrasePlan) target(k, n int, sign float64, s slot, cfg config.MapperConfig) (x, y float64) {
+	g := cfg.Geometry
 	u := 0.5
 	if n > 1 {
 		u = float64(k) / float64(n-1)
 	}
 	dx, dy := patterns[pp.pattern].at(k, u)
 	if pp.mirror {
-		dy = -dy
+		dx = -dx
 	}
-	return math.Round(sign * (homeX + dx)), math.Round(homeY + dy)
+	spread := cfg.SpreadMin + (1-cfg.SpreadMin)*s.loud
+	if s.toneN >= 0 {
+		dy = cfg.ToneWeight*(s.toneN-0.5)*2*cfg.ToneRangeY + (1-cfg.ToneWeight)*dy
+	}
+	return math.Round(sign * (g.HomeX + spread*dx)), math.Round(g.HomeY + spread*dy)
 }

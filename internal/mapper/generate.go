@@ -72,7 +72,8 @@ func Generate(r *analysis.Result, tl Timeline, o Options, cfg config.MapperConfi
 
 func generateDifficulty(r *analysis.Result, tl Timeline, name string, dc config.DifficultyConfig,
 	l rules.Limits, cfg config.MapperConfig, rng *rand.Rand, walls bool) Difficulty {
-	sel := selectByDensity(buildSlots(r, tl, dc, cfg), r, dc)
+	sel := selectByBars(buildSlots(r, tl, dc, cfg), r, dc, cfg)
+	normalizeTone(sel, cfg)
 	markSpecials(sel, r, tl, dc)
 	rails := pickRails(r, tl, sel, dc, cfg)
 	events := assignHands(sel, rails, dc, cfg)
@@ -133,7 +134,7 @@ func assignHands(sel []slot, rails []railPlan, dc config.DifficultyConfig, cfg c
 			rp := rails[ri]
 			head := s
 			if math.Abs(rp.start-s.grid) > 1e-9 {
-				head = slot{grid: rp.start, phrase: s.phrase, label: s.label}
+				head = slot{grid: rp.start, phrase: s.phrase, label: s.label, loud: s.loud, toneN: -1, repeatOf: -1}
 			}
 			events = append(events, event{slot: head, kind: evRail, hand: rp.hand, rail: rp})
 			lastHand, run = rp.hand, 1
@@ -177,7 +178,7 @@ func assignHands(sel []slot, rails []railPlan, dc config.DifficultyConfig, cfg c
 	}
 	for ; ri < len(rails); ri++ {
 		rp := rails[ri]
-		events = append(events, event{slot: slot{grid: rp.start, phrase: -1}, kind: evRail, hand: rp.hand, rail: rp})
+		events = append(events, event{slot: slot{grid: rp.start, phrase: -1, toneN: -1, repeatOf: -1}, kind: evRail, hand: rp.hand, rail: rp})
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].slot.grid < events[j].slot.grid })
 	return events
@@ -205,12 +206,30 @@ func place(events []event, plans []phrasePlan, tl Timeline, l rules.Limits, cfg 
 		seen[k]++
 		return i, total[k]
 	}
+	// placed positions per (bar, position in bar, hand), so a bar that
+	// repeats an earlier bar of its phrase (see selectByBars) repeats its
+	// note positions
+	type spot struct {
+		bar, pos int
+		hand     rules.Hand
+	}
+	placedAt := map[spot][2]float64{}
 	want := func(e event, h rules.Hand) (float64, float64) {
 		k, n := nextK(e, h)
+		if e.slot.repeatOf >= 0 {
+			if p, ok := placedAt[spot{e.slot.repeatOf, e.slot.pos, h}]; ok {
+				return p[0], p[1]
+			}
+		}
 		if e.slot.phrase < 0 || e.slot.phrase >= len(plans) {
 			return h.Sign() * g.HomeX, g.HomeY
 		}
-		return plans[e.slot.phrase].position(k, n, h.Sign(), g.HomeX, g.HomeY)
+		return plans[e.slot.phrase].target(k, n, h.Sign(), e.slot, cfg)
+	}
+	remember := func(e event, h rules.Hand, x, y float64) {
+		if e.slot.phrase >= 0 {
+			placedAt[spot{e.slot.bar, e.slot.pos, h}] = [2]float64{x, y}
+		}
 	}
 
 	var notes []rules.Note
@@ -251,6 +270,7 @@ func place(events []event, plans []phrasePlan, tl Timeline, l rules.Limits, cfg 
 			}
 			notes = append(notes, rules.Note{T: t, X: x, Y: y, Type: handType(e.hand)})
 			touch(e.hand, rules.Point{T: t, X: x, Y: y})
+			remember(e, e.hand, x, y)
 		case evSpecial:
 			x, y, ok := search(cfg.SpecialX, cfg.SpecialY, func(x, y float64) bool {
 				return fits(rules.Left, false, x, y, t) && fits(rules.Right, false, x, y, t)
@@ -275,6 +295,7 @@ func place(events []event, plans []phrasePlan, tl Timeline, l rules.Limits, cfg 
 				// fall back to the left note alone
 				notes = append(notes, rules.Note{T: t, X: lx, Y: ly, Type: synthfile.LeftHanded})
 				touch(rules.Left, rules.Point{T: t, X: lx, Y: ly})
+				remember(e, rules.Left, lx, ly)
 				continue
 			}
 			notes = append(notes,
@@ -282,6 +303,8 @@ func place(events []event, plans []phrasePlan, tl Timeline, l rules.Limits, cfg 
 				rules.Note{T: t, X: rx, Y: ry, Type: synthfile.RightHanded})
 			touch(rules.Left, rules.Point{T: t, X: lx, Y: ly})
 			touch(rules.Right, rules.Point{T: t, X: rx, Y: ry})
+			remember(e, rules.Left, lx, ly)
+			remember(e, rules.Right, rx, ry)
 		case evRail:
 			x0, y0 := want(e, e.hand)
 			x, y, ok := search(x0, y0, func(x, y float64) bool { return fits(e.hand, true, x, y, t) })
