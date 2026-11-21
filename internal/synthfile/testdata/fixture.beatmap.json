@@ -1,0 +1,54 @@
+{
+  "Name": "Fixture Song",
+  "Author": "Some Artist",
+  "Artwork": "cover.png",
+  "ArtworkBytes": "iVBORw0KGgo=",
+  "AudioName": "FixtureSong_0123abcd.ogg",
+  "AudioData": null,
+  "AudioFrecuency": 44100,
+  "AudioChannels": 2,
+  "BPM": 128.0,
+  "Offset": 120,
+  "Track": {
+    "Easy": {},
+    "Normal": {
+      "128": [
+        {"Id": "Note_128RightHanded0", "ComboId": -1, "Position": [0.4115, 0.1377, 9.375], "Segments": null, "Type": 0, "Direction": 0},
+        {"Id": "Note_128LeftHanded1", "ComboId": -1, "Position": [-0.4075, 0.1377, 9.375], "Segments": null, "Type": 1, "Direction": 0, "FutureNoteField": {"a": 1}}
+      ],
+      "21.333333333": [
+        {"Id": "Note_21.333333333OneHandSpecial0", "ComboId": -1, "Position": [0.002, 0.0012, 1.5625], "Segments": null, "Type": 2, "Direction": 0}
+      ],
+      "256": [
+        {"Id": "Note_256RightHanded0", "ComboId": -1, "Position": [0.5480, 0.0012, 18.75],
+         "Segments": [[0.6845, 0.1377, 20.0], [0.5480, 0.2742, 21.25], [0.4115, 0.1377, 22.5]], "Type": 0, "Direction": 0},
+        {"Id": "Note_256BothHandsSpecial1", "ComboId": -1, "Position": [0.002, 0.4107, 18.75], "Segments": null, "Type": 3, "Direction": 0}
+      ]
+    },
+    "Hard": {}, "Expert": {}, "Master": {}, "Custom": {}
+  },
+  "Effects": {"Easy": [], "Normal": [64.0, 512.0], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Bookmarks": {"BookmarksList": [{"time": 256.0, "name": "Drop"}]},
+  "Jumps": {"Easy": [], "Normal": [], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Crouchs": {"Easy": [], "Normal": [{"time": 384.0, "position": [0.0157, -1.0226, 28.125], "initialized": true}], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Slides": {"Easy": [], "Normal": [{"time": 448.0, "slideType": 3, "position": [0.002, 0.1787, 32.8125], "zRotation": 45.0, "initialized": true}], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Lights": {"Easy": [], "Normal": [128.0], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Squares": {"Easy": [], "Normal": [], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "Triangles": {"Easy": [], "Normal": [{"time": 480.0, "position": [0.002, 0.6427, 35.15625], "zRotation": 0.0, "initialized": true}], "Hard": [], "Expert": [], "Master": [], "Custom": []},
+  "DrumSamples": null,
+  "FilePath": "Redacted",
+  "IsAdminOnly": false,
+  "EditorVersion": "2.x",
+  "Beatmapper": "tester",
+  "CustomDifficultyName": "Custom",
+  "CustomDifficultySpeed": 1.0,
+  "UsingBeatMeasure": true,
+  "UpdatedWithMovementPositions": true,
+  "ProductionMode": false,
+  "Tags": ["test"],
+  "BeatConverted": false,
+  "BeatModified": false,
+  "ModifiedTime": 1732099200,
+  "Explicit": false,
+  "FutureTopLevelField": [1, 2, 3]
+}

@@ -1,0 +1,29 @@
+# Generated maps (not source)
+/out/
+
+# Test songs: commercial, copyrighted audio — keep locally, never commit
+/testdata/*.mp3
+/testdata/*.synth
+
+# Go build and test artifacts
+/ncart
+*.test
+*.out
+coverage.*
+*.prof
+
+# Debug output from `ncart analyze`
+*.debug.json
+check*.wav
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local Claude Code settings
+.claude/settings.local.json

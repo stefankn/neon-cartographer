@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400" role="img" aria-labelledby="t d">
+  <title id="t">neon-cartographer</title>
+  <desc id="d">A neon compass rose with a sound wave, and a route of note orbs across a perspective grid: music turned into a map.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#160a2e"/>
+      <stop offset="0.7" stop-color="#0a0518"/>
+      <stop offset="1" stop-color="#05030c"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2ef2ff"/>
+      <stop offset="1" stop-color="#ff3fd8"/>
+    </linearGradient>
+    <linearGradient id="neonV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2ef2ff"/>
+      <stop offset="1" stop-color="#ff3fd8"/>
+    </linearGradient>
+    <linearGradient id="floorFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff3fd8" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#ff3fd8" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff3fd8" stop-opacity="0.9"/>
+    </linearGradient>
+    <radialGradient id="orbCyan" cx="0.4" cy="0.35" r="0.65">
+      <stop offset="0" stop-color="#e8fdff"/>
+      <stop offset="0.45" stop-color="#2ef2ff"/>
+      <stop offset="1" stop-color="#0a6f8a"/>
+    </radialGradient>
+    <radialGradient id="orbPink" cx="0.4" cy="0.35" r="0.65">
+      <stop offset="0" stop-color="#ffe8fa"/>
+      <stop offset="0.45" stop-color="#ff3fd8"/>
+      <stop offset="1" stop-color="#7a1468"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="frame"><rect width="1200" height="400" rx="28"/></clipPath>
+    <clipPath id="floor"><rect x="0" y="282" width="1200" height="118"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1200" height="400" fill="url(#bg)"/>
+
+    <!-- topographic contour lines in the sky -->
+    <g fill="none" stroke="#2ef2ff" stroke-opacity="0.10" stroke-width="1.5">
+      <path d="M0 60 C150 30 260 95 420 70 S700 20 860 55 S1080 95 1200 50"/>
+      <path d="M0 95 C160 65 270 130 430 105 S710 55 870 90 S1090 130 1200 85"/>
+      <path d="M0 130 C170 100 280 165 440 140 S720 90 880 125 S1100 165 1200 120"/>
+      <path d="M0 165 C180 135 290 200 450 175 S730 125 890 160 S1110 200 1200 155"/>
+      <path d="M0 200 C190 170 300 235 460 210 S740 160 900 195 S1120 235 1200 190"/>
+      <path d="M0 235 C200 205 310 270 470 245 S750 195 910 230 S1130 270 1200 225"/>
+    </g>
+
+    <!-- horizon -->
+    <line x1="0" y1="282" x2="1200" y2="282" stroke="url(#neon)" stroke-width="2" filter="url(#softglow)"/>
+
+    <!-- perspective grid floor, vanishing point (600, 282) -->
+    <g clip-path="url(#floor)" stroke="url(#floorFade)" stroke-width="1.4" fill="none">
+      <line x1="0" y1="290" x2="1200" y2="290"/>
+      <line x1="0" y1="300" x2="1200" y2="300"/>
+      <line x1="0" y1="314" x2="1200" y2="314"/>
+      <line x1="0" y1="334" x2="1200" y2="334"/>
+      <line x1="0" y1="362" x2="1200" y2="362"/>
+      <line x1="0" y1="398" x2="1200" y2="398"/>
+      <path d="M600 282 L-1600 400 M600 282 L-1000 400 M600 282 L-500 400 M600 282 L-100 400
+               M600 282 L250 400 M600 282 L600 400 M600 282 L950 400 M600 282 L1300 400
+               M600 282 L1700 400 M600 282 L2200 400 M600 282 L2800 400"/>
+    </g>
+
+    <!-- the route: a dashed path of note orbs across the floor, like a mapped track -->
+    <path d="M140 400 C330 360 430 330 560 312 S760 296 880 290" fill="none"
+          stroke="url(#neon)" stroke-width="3" stroke-dasharray="10 9" stroke-linecap="round" filter="url(#softglow)"/>
+    <g filter="url(#softglow)">
+      <circle cx="268" cy="374" r="13" fill="url(#orbCyan)"/>
+      <circle cx="430" cy="335" r="9.5" fill="url(#orbPink)"/>
+      <circle cx="560" cy="312" r="7" fill="url(#orbCyan)"/>
+      <circle cx="680" cy="301" r="5" fill="url(#orbPink)"/>
+      <circle cx="790" cy="294" r="3.6" fill="url(#orbCyan)"/>
+    </g>
+
+    <!-- emblem: compass rose with a sound wave -->
+    <g transform="translate(200 172)">
+      <circle r="112" fill="#0a0518" fill-opacity="0.85"/>
+      <circle r="104" fill="none" stroke="url(#neonV)" stroke-width="4" filter="url(#glow)"/>
+      <circle r="88" fill="none" stroke="#2ef2ff" stroke-opacity="0.35" stroke-width="1.5"/>
+      <!-- bearing ticks -->
+      <g stroke="#2ef2ff" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round">
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(30)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(60)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(120)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(150)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(210)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(240)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(300)"/>
+        <line x1="0" y1="-96" x2="0" y2="-90" transform="rotate(330)"/>
+      </g>
+      <!-- four-point rose -->
+      <g filter="url(#softglow)">
+        <path d="M0 -84 L13 -13 L0 0 Z" fill="#ff3fd8"/>
+        <path d="M0 -84 L-13 -13 L0 0 Z" fill="#ff8fe9"/>
+        <path d="M84 0 L13 13 L0 0 Z" fill="#2ef2ff"/>
+        <path d="M84 0 L13 -13 L0 0 Z" fill="#9af8ff"/>
+        <path d="M0 84 L-13 13 L0 0 Z" fill="#ff3fd8"/>
+        <path d="M0 84 L13 13 L0 0 Z" fill="#ff8fe9"/>
+        <path d="M-84 0 L-13 -13 L0 0 Z" fill="#2ef2ff"/>
+        <path d="M-84 0 L-13 13 L0 0 Z" fill="#9af8ff"/>
+      </g>
+      <!-- sound wave through the centre -->
+      <path d="M-78 0 L-62 0 L-54 -10 L-46 12 L-38 -26 L-30 30 L-22 -44 L-14 40 L-6 -54 L2 50
+               L10 -38 L18 30 L26 -22 L34 16 L42 -10 L50 6 L58 0 L78 0"
+            fill="none" stroke="#ffffff" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" filter="url(#softglow)"/>
+      <circle r="5" fill="#ffffff"/>
+    </g>
+
+    <!-- title -->
+    <g font-family="'Avenir Next', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+      <text x="360" y="178" font-size="72" font-weight="700" letter-spacing="1" fill="url(#neon)" filter="url(#glow)">neon-cartographer</text>
+      <text x="364" y="226" font-size="26" font-weight="500" letter-spacing="3" fill="#cfc6ff" fill-opacity="0.85">MUSIC IN · SYNTH RIDERS MAPS OUT</text>
+    </g>
+  </g>
+</svg>
