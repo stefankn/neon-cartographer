@@ -12,12 +12,20 @@ import (
 
 	"github.com/stefankn/neon-cartographer/internal/audio"
 	"github.com/stefankn/neon-cartographer/internal/config"
+	"github.com/stefankn/neon-cartographer/internal/stems"
 	"github.com/stefankn/neon-cartographer/internal/synthfile"
 )
 
 // drumLoop writes a 120 BPM kick/hat loop whose first beat is at phase.
 func drumLoop(t *testing.T, path string, bpm, phase, seconds float64) {
 	t.Helper()
+	if err := audio.WriteWAV(path, drumLoopSamples(bpm, phase, seconds), 44100); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// drumLoopSamples is a kick/hat loop whose first beat is at phase.
+func drumLoopSamples(bpm, phase, seconds float64) []float32 {
 	const rate = 44100
 	s := make([]float32, int(seconds*rate))
 	rng := rand.New(rand.NewSource(3))
@@ -38,9 +46,28 @@ func drumLoop(t *testing.T, path string, bpm, phase, seconds float64) {
 			s[hs+i] += float32(0.2 * (2*rng.Float64() - 1) * math.Exp(-float64(i)/(0.02*rate)))
 		}
 	}
-	if err := audio.WriteWAV(path, s, rate); err != nil {
-		t.Fatal(err)
+	return s
+}
+
+// offbeatBass is a loud low note on every off-beat: in the mix it outweighs
+// the kicks and pulls the detected beat half a beat late.
+func offbeatBass(bpm, phase, seconds float64) []float32 {
+	const rate = 44100
+	s := make([]float32, int(seconds*rate))
+	for k := 0; ; k++ {
+		tb := phase + (float64(k)+0.5)*60/bpm
+		if tb > seconds-0.5 {
+			break
+		}
+		st := int(tb * rate)
+		ph := 0.0
+		for i := 0; i < rate/4 && st+i < len(s); i++ {
+			x := float64(i) / rate
+			ph += 2 * math.Pi * (70 + 80*math.Exp(-x/0.015)) / rate
+			s[st+i] += float32(1.2 * math.Sin(ph) * math.Exp(-x/0.1))
+		}
 	}
+	return s
 }
 
 func TestEndToEnd(t *testing.T) {
@@ -54,7 +81,8 @@ func TestEndToEnd(t *testing.T) {
 	const bpm, phase = 120.0, 0.31
 	drumLoop(t, in, bpm, phase, 30)
 
-	rep, err := Run(Options{In: in, Difficulties: []string{"Easy", "Normal", "Hard", "Expert", "Master"}, Title: "Loop", Artist: "Test", Walls: true}, config.Default())
+	t.Setenv(stems.EnvDemucs, filepath.Join(dir, "no-demucs")) // never run the real demucs
+	rep, err := Run(Options{In: in, Difficulties: []string{"Easy", "Normal", "Hard", "Expert", "Master"}, Title: "Loop", Artist: "Test", Walls: true, NoStems: true}, config.Default())
 	if errors.Is(err, audio.ErrNoEncoder) {
 		t.Skip("no Ogg encoder")
 	}
@@ -112,4 +140,76 @@ func TestEndToEnd(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestEndToEndWithStems: cached stems are used, the beat phase comes from
+// the drum stem although the mix alone would put it on the off-beats.
+func TestEndToEndWithStems(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not found (needed with stems)")
+	}
+	if _, err := exec.LookPath("sox"); err != nil {
+		t.Skip("sox not found")
+	}
+	dir := t.TempDir()
+	t.Setenv(stems.EnvDemucs, filepath.Join(dir, "no-demucs")) // the cache must suffice
+	const bpm, phase, secs = 120.0, 0.31, 30.0
+	drums, bass := drumLoopSamples(bpm, phase, secs), offbeatBass(bpm, phase, secs)
+	mix := make([]float32, len(drums))
+	for i := range mix {
+		mix[i] = drums[i] + bass[i]
+	}
+	in := filepath.Join(dir, "song.wav")
+	if err := audio.WriteWAV(in, mix, 44100); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	sdir := stems.Dir(in, cfg.Stems)
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	silence := make([]float32, len(mix))
+	for name, s := range map[string][]float32{"drums": drums, "bass": bass, "vocals": silence, "other": silence} {
+		if err := audio.WriteWAV(filepath.Join(sdir, name+".wav"), s, 44100); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	period := 60 / bpm
+	without, err := Run(Options{In: in, Out: filepath.Join(dir, "plain.synth"), Difficulties: []string{"Normal"}, NoStems: true}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := phaseDist(without.Analysis.Grid.FirstBeat, phase+period/2, period); e > 0.02 {
+		t.Fatalf("test signal: without stems the first beat is %.3f, want the off-beats (%.3f)",
+			without.Analysis.Grid.FirstBeat, math.Mod(phase+period/2, period))
+	}
+
+	rep, err := Run(Options{In: in, Difficulties: []string{"Easy", "Normal", "Hard"}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Stems == nil || rep.Stems.Separated || len(rep.Warnings) > 0 {
+		t.Fatalf("stems %+v, note %q, warnings %v", rep.Stems, rep.StemsNote, rep.Warnings)
+	}
+	tempo := rep.Analysis.Tempo
+	if tempo.PhaseSource != "drums" {
+		t.Fatalf("phase source %q (drum level %.1f dB)", tempo.PhaseSource, tempo.DrumLevelDB)
+	}
+	if e := phaseDist(rep.Analysis.Grid.FirstBeat, phase, period); e > 0.02 {
+		t.Errorf("first beat %.3f, want the kicks at %.3f", rep.Analysis.Grid.FirstBeat, phase)
+	}
+	if math.Abs(rep.AlignResidualSec) > cfg.Export.MaxAlignResidualSec {
+		t.Errorf("Ogg alignment residual %.2f ms", rep.AlignResidualSec*1000)
+	}
+	for _, d := range rep.Validation {
+		if len(d.Violations) > 0 {
+			t.Fatalf("%s: %v", d.Name, d.Violations)
+		}
+	}
+}
+
+func phaseDist(a, b, period float64) float64 {
+	d := math.Mod(math.Abs(a-b), period)
+	return math.Min(d, period-d)
 }

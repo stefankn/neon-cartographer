@@ -410,3 +410,70 @@ func TestHalfBeatOverride(t *testing.T) {
 		}
 	}
 }
+
+// drumStemSong builds a mix whose loudest hits sit on the off-beats (like a
+// bass line pushing the detected beat half a beat early) plus soft kicks on
+// the beats, and the drum stem holding only those kicks, scaled by drumGain.
+func drumStemSong(drumGain float64) (mix, drums *signal) {
+	const bpm, phase, secs = 120.0, 0.3, 30.0
+	half := 30 / bpm
+	mix, drums = newSignal(secs), newSignal(secs)
+	beatsOf(bpm, phase, secs, func(_ int, tm float64) {
+		mix.kick(tm, 0.3)
+		drums.kick(tm, 0.3*drumGain)
+		mix.kick(tm+half, 0.9)
+		mix.click(tm+half, 0.5)
+	})
+	return mix, drums
+}
+
+func TestDrumStemPhase(t *testing.T) {
+	cfg := config.Default().Analysis
+	mix, drums := drumStemSong(1)
+	r, err := Analyze(mix.audio(), cfg, Overrides{Drums: drums.audio()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Grid.Period()
+	if r.Tempo.PhaseSource != "drums" {
+		t.Fatalf("phase source %q (drum level %.1f dB)", r.Tempo.PhaseSource, r.Tempo.DrumLevelDB)
+	}
+	// the drum stem puts the beat on the kicks, the mix half a beat later
+	if e := phaseError(r.Grid.FirstBeat, 0.3, p); e > 0.02 {
+		t.Errorf("first beat %.3f, want the kicks at 0.300 (error %.3f)", r.Grid.FirstBeat, e)
+	}
+	if e := phaseError(r.Tempo.MixPhase, 0.3+p/2, p); e > 0.02 {
+		t.Errorf("mix phase %.3f, want the off-beats at %.3f — test signal doesn't fool the mix", r.Tempo.MixPhase, 0.3+p/2)
+	}
+
+	// -half-beat moves the drum phase
+	h, err := Analyze(mix.audio(), cfg, Overrides{Drums: drums.audio(), HalfBeat: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := phaseError(h.Grid.FirstBeat, r.Grid.FirstBeat+p/2, p); e > 1e-9 {
+		t.Errorf("-half-beat: first beat %.4f, want %.4f + half a beat", h.Grid.FirstBeat, r.Grid.FirstBeat)
+	}
+}
+
+func TestDrumStemTooQuiet(t *testing.T) {
+	cfg := config.Default().Analysis
+	mix, drums := drumStemSong(0.005) // ≈ −46 dB below the kicks: leakage only
+	r, err := Analyze(mix.audio(), cfg, Overrides{Drums: drums.audio()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tempo.PhaseSource != "mix" || r.Tempo.Phase != r.Tempo.MixPhase {
+		t.Fatalf("phase source %q at drum level %.1f dB, want the mix", r.Tempo.PhaseSource, r.Tempo.DrumLevelDB)
+	}
+	if r.Tempo.DrumLevelDB >= cfg.DrumStemMinLevelDB {
+		t.Fatalf("drum level %.1f dB isn't below the threshold", r.Tempo.DrumLevelDB)
+	}
+	plain, err := Analyze(mix.audio(), cfg, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Grid != r.Grid || plain.Tempo.PhaseSource != "mix" {
+		t.Errorf("grid %+v differs from the analysis without stem %+v", r.Grid, plain.Grid)
+	}
+}

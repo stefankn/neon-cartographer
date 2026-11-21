@@ -63,6 +63,11 @@ type Overrides struct {
 	// detected beats fall on what a listener hears as the off-beats
 	// (check with the analyze -beat-test track).
 	HalfBeat bool
+	// Drums is the song's drum stem (same rate and timeline as the mix), or
+	// nil. If it is loud enough (DrumStemMinLevelDB), the beat phase is
+	// taken from it: on both test songs the mix put the beat half a beat
+	// before the felt beat, the drum stem on it. The BPM stays from the mix.
+	Drums *audio.Audio
 }
 
 // Analyze runs the full analysis.
@@ -88,6 +93,17 @@ func Analyze(a *audio.Audio, cfg config.AnalysisConfig, ov Overrides) (*Result, 
 	// Tempo and grid.
 	comb := combinedEnvelope(env, cfg.BandWeights, feat.frameRate)
 	r.Tempo = estimateTempo(comb, feat.frameRate, cfg, ov.BPM)
+	r.Tempo.PhaseSource, r.Tempo.MixPhase = "mix", r.Tempo.Phase
+	if ov.Drums != nil {
+		if ov.Drums.Rate != a.Rate {
+			return nil, errors.New("analysis: drum stem must have the mix's sample rate")
+		}
+		r.Tempo.DrumLevelDB = toDB(rms(ov.Drums.Samples)) - toDB(rms(a.Samples))
+		if r.Tempo.DrumLevelDB >= cfg.DrumStemMinLevelDB {
+			r.Tempo.Phase = drumPhase(ov.Drums.Samples, r.Tempo.BPM, cfg)
+			r.Tempo.PhaseSource = "drums"
+		}
+	}
 	if ov.HalfBeat {
 		p := 60 / r.Tempo.BPM
 		r.Tempo.Phase = math.Mod(r.Tempo.Phase+p/2, p)
@@ -115,6 +131,18 @@ func Analyze(a *audio.Audio, cfg config.AnalysisConfig, ov Overrides) (*Result, 
 	r.Sustains = detectSustains(feat.energy, feat.frameRate, r.Grid, cfg)
 	r.Accents = findAccents(r.Onsets, r.Grid, feat.frameRate, cfg)
 	return r, nil
+}
+
+// drumPhase is the beat phase of the drum stem at the mix's BPM, found the
+// same way as the mix's phase (combined band envelope, latency-corrected).
+func drumPhase(samples []float32, bpm float64, cfg config.AnalysisConfig) float64 {
+	feat := computeBandFeatures(samples, cfg)
+	env := make([][]float64, len(feat.flux))
+	for b, f := range feat.flux {
+		env[b] = normalize(f)
+	}
+	comb := combinedEnvelope(env, cfg.BandWeights, feat.frameRate)
+	return estimateTempo(comb, feat.frameRate, cfg, bpm).Phase
 }
 
 // snapOnsets places onsets on the grid for each configured subdivision.

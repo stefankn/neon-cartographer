@@ -5,6 +5,7 @@
 /testdata/*.mp3
 /testdata/*.synth
 /testdata/*.stems/
+/testdata/*.wav
 
 # Go build and test artifacts
 /ncart

@@ -20,10 +20,11 @@ go run ./cmd/ncart analyze -in testdata/bonobo-drift.mp3 -debug /tmp/a.json -cli
 
 Toolchain: Go 1.24+ (gonum v0.17 requires it). External tools: **sox** (required for Ogg export; the
 Homebrew ffmpeg here has *no* libvorbis), ffmpeg/ffprobe (optional: tags, cover art, other formats).
-Optional, experimental: **demucs** via `just setup-stems` (needs uv; sandboxed sessions need write access
+Optional: **demucs** via `just setup-stems` (needs uv; sandboxed sessions need write access
 to `~/.local/share/uv` plus outgoing network for uv *and* the venv's Python, which downloads the model on
-first run). `just stems` picks the device itself (`demucs_device=auto`: MPS if torch can use it, else
-CPU). **In a nono-sandboxed session Metal is unreachable** (nono 0.81 has no GPU/IOKit grant; torch then
+first run). **ncart uses stems automatically** (cached, or it runs demucs for a new song; `-no-stems`
+off), so `go run ./cmd/ncart …` on a new song can take ≈ 1–2 min the first time. ncart picks the device
+itself (auto: MPS if torch can use it, else CPU). **In a nono-sandboxed session Metal is unreachable** (nono 0.81 has no GPU/IOKit grant; torch then
 says "MPS backend is supported on MacOS 13.0+", which is misleading — outside the sandbox MPS works), so
 Claude gets the CPU (≈ 100 s per song) automatically; don't force `mps` there. Stems are cached per song,
 so this only matters for new songs.
@@ -31,8 +32,8 @@ so this only matters for new songs.
 ## Layout and data flow
 
 ```
-cmd/ncart             CLI: generate (default), analyze, validate — stdlib flag, subcommand switch
-internal/config       ALL tunables: config.go (analysis, export), mapper.go (difficulty table, geometry)
+cmd/ncart             CLI: generate (default), analyze, validate, stems — stdlib flag, subcommand switch
+internal/config       ALL tunables: config.go (analysis, export, stems), mapper.go (difficulty table, geometry)
 internal/audio        decode (mp3/ogg/wav native, ffmpeg fallback), resample, EncodeOgg (sox → ffmpeg
                       libvorbis → ffmpeg native), MeasureOffset (envelope cross-correlation), tags/cover
 internal/analysis     STFT → band flux → onsets; tempo/grid; energy, phrases, sustains, accents → Result
@@ -41,18 +42,24 @@ internal/mapper       Timeline (padding/beat mapping) + Generate: slots → per-
 internal/rules        hand-motion model, Check (violations), Stats, FromSynth, ValidateFile
 internal/export       mapper.Map → synthfile.File in editor-1.9.7 style
 internal/synthfile    .synth read/write/Check; lossless round trip (unknown fields kept)
+internal/stems        demucs lookup ($NCART_DEMUCS → tools/stems/.venv upward from cwd → PATH), Separate
+                      (--shifts 0, device auto), cache <song>.stems/htdemucs, Open (mix + aligned stems,
+                      falls back to the plain decode on any problem)
 internal/generate     the whole pipeline (Run), used by the CLI and the end-to-end test
 reference/            editor-sample.synth — saved by the official editor 1.9.7; ground truth for tests.
                       JSON entries are untouched editor output; the audio is replaced by 1 s of silence
                       (copyright) and the zip was rebuilt — see docs/synth-format.md
-testdata/             bonobo-drift.mp3 (126 BPM), all_saints-pure_shores.mp3 (100.6 BPM) — test songs; local
-                      only, git-ignored (copyrighted). Both need -half-beat (felt beat, user-verified).
-                      <song>.stems/ = demucs output (git-ignored, copyrighted too)
+testdata/             bonobo-drift.mp3 (126 BPM), all_saints-pure_shores.mp3 (100.6 BPM),
+                      4_strings-take_me_away.mp3 (138.07 BPM, dance) — test songs; local only,
+                      git-ignored (copyrighted, also *.wav). Without stems Bonobo and Pure Shores need
+                      -half-beat (felt beat, user-verified); with stems the drum-stem phase gets all
+                      three right (see Status). <song>.stems/ = demucs output (git-ignored)
 tools/stems/          uv project for the optional demucs tool (pyproject.toml, uv.lock; .venv git-ignored)
 out/                  generated maps (not source)
 ```
 
-Pipeline: `audio.Decode` → `analysis.Analyze` → `mapper.NewTimeline` → `audio.EncodeOgg` with padding →
+Pipeline: `stems.Open` (stems: ffmpeg decode + stems, offset check; else `audio.Decode`) →
+`analysis.Analyze` (beat phase from the drum stem if loud enough) → `mapper.NewTimeline` → `audio.EncodeOgg` with padding →
 decode the Ogg and `MeasureOffset` against the original (re-encode once if > 2 ms off) →
 `mapper.Generate` → `export.Build` → write → re-read → `synthfile.Check` + `rules.ValidateFile` (any
 violation fails generation).
@@ -118,7 +125,8 @@ Confirmed by the user in Beatmap Editor 1.9.7 and on a Quest 3:
   enforce it); fix the mapper rather than loosening a check.
 - Tests use deterministic synthetic signals (`analysis/synth_test.go`) and a synthetic
   `analysis.Result` (`mapper/mapper_test.go: richResult`); file-based tests skip if the reference file or
-  sox/ffmpeg is missing.
+  sox/ffmpeg is missing. Tests must never run the real demucs: set `NCART_DEMUCS` to a nonexistent path
+  or a fake script (`stems_test.go: fakeDemucs`) and/or `NoStems`.
 - Output is deterministic for a given `-seed`.
 - Downloaded or extracted third-party files go in the scratchpad, never into the repo.
 
@@ -144,16 +152,26 @@ Next steps:
    same default and override) and `just stems <song>` → `<song>.stems/htdemucs/<stem>.wav` (MPS ≈ 55 s if
    available, else CPU ≈ 100 s per song; `--shifts 0` for reproducible stems). Measured on Pure Shores: stems are sample-exact with the *ffmpeg* decode (lag 0,
    stem sum within 2.3 % RMS); our native MP3 decoder and sox/MAD start ≈ 50 ms later → stems must be
-   aligned with `MeasureOffset`, never assumed. Next: Go side (`internal/stems`: find cache, align,
-   fall back without stems), then the vocal experiment: notes from vocal-stem onsets + real vocal pitch.
-   **Decided (user, 2026-11-21):** when stems are used, ncart decodes the song through ffmpeg (the existing
-   fallback path in `audio/decode.go`) so analysis and stems share one clock; still run `MeasureOffset`
-   stems ↔ analysed audio as a check (expect ≈ 0 ms). Not chosen: feeding demucs our own decode (it's
-   mono; demucs separates better from stereo).
-2. Automatic beat phase (so `-half-beat` isn't needed): **the drum stem's detected beat equals the
-   user-verified felt beat on both test songs** (Pure Shores 0.447 s vs `-half-beat` 0.450 s; Bonobo 0.134
-   vs 0.137, on the ffmpeg clock). Bass stem agrees on Pure Shores only. Two songs is not a verified set —
-   still collect more listening-verified songs with `analyze -beat-test` before relying on it.
+   aligned with `MeasureOffset`, never assumed.
+   **Step 3 done (2026-11-21):** `internal/stems`; stems used automatically (user's call), ncart runs
+   demucs itself, `ncart stems` subcommand (`just stems` wraps it). With stems the song is decoded by
+   ffmpeg (user's call: one clock; offset measured on the stem sum: 0.0 ms, corr 0.98–1.00 on both test
+   songs); stems are decoded by ffmpeg too (native WAV decoder ≈ 12 s per stem, ffmpeg 0.4 s). Any
+   problem → plain decode, identical output to `-no-stems` (verified: same notes/metadata/audio as before).
+   Beat phase from the drum stem (BPM from the mix): Pure Shores 0.447 s, Bonobo 0.134 s = the old
+   `-half-beat` grid; maps without `-half-beat`: 0 violations, Ogg residual ≤ 0.16 ms; same note counts
+   (±3 %), but only 43–91 % of notes on identical ticks — the few-ms phase difference cascades through
+   snapping and per-bar selection, so these are new maps (not yet play-tested).
+   Next: the vocal experiment — notes from vocal-stem onsets + real vocal pitch (`generate.Report.Stems`
+   holds the aligned stems).
+2. Automatic beat phase: **in use via the drum stem** (step 3), because it matched the user-verified felt
+   beat on both test songs (bass stem only on Pure Shores). Third song (Take Me Away, 138 BPM, 2026-11-21):
+   drum stem 0.230 s vs mix 0.021 s (+0.48 beat; ffmpeg clock); the user confirmed the drum-stem beat test
+   (`out/take_me_away-beattest-drums.wav`) sounds right. Caveat: an earlier listen to the *mix*-grid beat
+   test was also judged "alright", so this one isn't a clean A/B yet. Verified set: 3 songs, the mix is
+   half a beat off on all three, the drum stem right on all three. Keep collecting with `analyze
+   -beat-test` (tests the drum-stem grid; `-no-stems` for the mix grid). Falls back to the mix if the
+   drum stem is below `DrumStemMinLevelDB` (−20 dB; drumless songs not measured yet).
 3. Smaller: section labels (Pure Shores: 27 of 28 phrases "calm" → sparse maps), density following
    energy continuously instead of 3 labels, more pairs (fire ~once per song).
 

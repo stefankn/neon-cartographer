@@ -24,6 +24,7 @@ the time available.
 - **ffmpeg** (optional): reads title/artist tags and embedded cover art, and decodes formats other than
   MP3/OGG/WAV. If only ffmpeg is present (no sox), its built-in Vorbis encoder is used with a quality
   warning.
+- **demucs** (optional, needs ffmpeg): stem separation, see [Stems](#stems-optional).
 
 ```
 go install github.com/stefankn/neon-cartographer/cmd/ncart@latest
@@ -44,7 +45,7 @@ go build -o ncart ./cmd/ncart
 ```
 ncart -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert,master]
       [-title "…"] [-artist "…"] [-mapper neon-cartographer] [-bpm 128] [-half-beat] [-offset-ms 0] [-seed 42]
-      [-walls] [-no-cover] [-debug analysis.json]
+      [-walls] [-no-cover] [-no-stems] [-debug analysis.json]
 ```
 
 | flag | meaning |
@@ -56,6 +57,7 @@ ncart -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert,mast
 | `-offset-ms` | move all notes later (+) or earlier (−) if the timing feels off |
 | `-seed` | same seed → identical map; another seed → different patterns |
 | `-walls` | add a few side walls in calm sections (Hard and up) |
+| `-no-stems` | don't use stems (see [Stems](#stems-optional)) |
 | `-debug` | write the full analysis (beats, onsets, energy, sections) as JSON |
 
 `generate` prints a summary and a validation table. It fails if the written map breaks any rule (that
@@ -83,7 +85,7 @@ is wrong.
 
 ```
 ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav]
-              [-beat-test beat.wav]
+              [-beat-test beat.wav] [-no-stems]
 ```
 
 Prints BPM, beat grid, onset counts, sections and sustains. `-clicks` writes the song with a click on
@@ -91,9 +93,34 @@ every detected beat (higher click = start of a bar), so you can **hear** whether
 
 **Check the beat before mapping a new song:** `-beat-test` writes the song with a low tock on every
 detected beat and an equally loud high tick halfway between. Nod or clap along to the *music*: if you
-land on the high tick, the detected grid is half a beat off (it happened on both test songs) — pass
-`-half-beat` to `generate` (and `analyze`). Clicks that coincide with a drum hit are hard to hear, so
-judge with the beat test rather than `-clicks` alone.
+land on the high tick, the detected grid is half a beat off — pass `-half-beat` to `generate` (and
+`analyze`). Clicks that coincide with a drum hit are hard to hear, so judge with the beat test rather
+than `-clicks` alone.
+
+With stems, the beat phase comes from the drum stem (`Beat phase: from the drum stem …` in the summary).
+On both test songs the mix alone put the grid half a beat early and the drum stem got it right, so
+they don't need `-half-beat` with stems. Two songs are not proof yet: the beat test is still worth
+doing for new songs.
+
+### Stems (optional)
+
+With [demucs](https://github.com/facebookresearch/demucs) installed, ncart separates each song into
+vocals, drums, bass and other once and caches the stems next to it
+(`song.mp3.stems/htdemucs/*.wav`, ≈ 190 MB per song). `generate` and `analyze` then use them
+automatically; today that means the **beat phase comes from the drum stem** (the BPM still comes from
+the whole mix; if the drum stem is nearly silent, the mix decides). More uses are planned.
+
+- Setup: `just setup-stems` (needs [uv](https://docs.astral.sh/uv/) and ffmpeg; see
+  [Development](#development)). Without demucs, or with `-no-stems`, everything works as before.
+- The first run of a new song separates it: ≈ 55 s on an Apple GPU, ≈ 100 s on the CPU for a
+  4½-minute song. Later runs use the cache.
+- `ncart stems -in song.mp3 [-device auto|cpu|mps] [-force]` separates without generating (`-force`
+  redoes cached stems). `just stems song.mp3` does the same.
+- ncart looks for demucs in `$NCART_DEMUCS`, then `tools/stems/.venv/bin/demucs` in the current
+  directory or a parent (the repository), then on `PATH`.
+- With stems, the song is decoded by ffmpeg, which is what demucs uses, so stems and song share one
+  timeline; the summary shows the measured offset (≈ 0 ms). Stale stems (a different file under the
+  same name) are detected and ignored with a warning; delete the `.stems` folder to redo them.
 
 ## Getting the map into the game
 
@@ -117,9 +144,12 @@ the editor. Sections are bookmarked.
 
 ```
 audio      decode (MP3/OGG/WAV natively, others via ffmpeg) → mono 44.1 kHz
+stems      optional: demucs stems (cached next to the song); then the song is decoded by ffmpeg
+           (the stems' timeline) and the stems' offset is checked
 analysis   STFT 2048/512 Hann → spectral flux per band (low/mid/high) → adaptive peak picking
            tempo: autocorrelation + comb + log-Gaussian prior (half/double), then a joint fine search of
-           BPM (0.01) and phase over the whole song, so one BPM holds without drift
+           BPM (0.01) and phase over the whole song, so one BPM holds without drift; with stems the
+           phase is searched on the drum stem
            grid snapping (1/1, 1/2, 1/4), RMS per beat/bar, calm/normal/intense phrases, drops,
            sustained tones (rail candidates), accents (low+high together), a tone per onset
            (flux-weighted mean log frequency, 100 Hz – 4 kHz)
@@ -180,8 +210,12 @@ Built in four milestones; all are done and verified:
    comfort-zone rules, phrase patterns with motifs, rails, two-hand specials, optional walls, the
    `validate` command and this README. It plays in the editor and on the Quest.
 
-**Next:** tuning the difficulty values from play-testing (density, hand speed, patterns, rail
-frequency). See [Tuning](#tuning).
+Since then: notes follow the music more closely (per-bar rhythm, height from tone, move size from
+loudness), `-half-beat` and `analyze -beat-test` for songs whose detected beat is half a beat off,
+and optional stems (demucs) with the beat phase taken from the drum stem.
+
+**Next:** use the stems for the notes themselves (vocal onsets and pitch), then tune from
+play-testing. See [Tuning](#tuning).
 
 ## Development
 
@@ -203,7 +237,7 @@ just analyze       # analysis summary, out/analysis.json and click track out/che
 
 `demo` and `analyze` need the test song (see below).
 
-Stem separation (experimental, not used by `ncart` yet) uses [demucs](https://github.com/facebookresearch/demucs)
+Stem separation (see [Stems](#stems-optional)) uses [demucs](https://github.com/facebookresearch/demucs)
 in its own Python environment: a [uv](https://docs.astral.sh/uv/) project in `tools/stems` (`pyproject.toml`
 and the committed `uv.lock` pin every package). The venv goes in `tools/stems/.venv` (≈ 450 MB, git-ignored),
 uv's own Python 3.12 in `~/.local/share/uv/python` (≈ 50 MB) and the model weights in `~/.cache/torch`
@@ -211,16 +245,16 @@ uv's own Python 3.12 in `~/.local/share/uv/python` (≈ 50 MB) and the model wei
 
 ```
 just setup-stems                  # create/update tools/stems/.venv exactly as locked
-just stems testdata/song.mp3      # → testdata/song.mp3.stems/htdemucs/{vocals,drums,bass,other}.wav
+just stems testdata/song.mp3      # = ncart stems: → testdata/song.mp3.stems/htdemucs/*.wav
 rm -rf tools/stems/.venv          # remove it again (optionally also: uv python uninstall 3.12)
 ```
 
 To change versions, edit `tools/stems/pyproject.toml` and run `uv lock --project tools/stems`. Set
-`NCART_DEMUCS` to use another demucs executable. `just stems` uses the Apple GPU (MPS) when torch can reach
-it and the CPU otherwise (≈ 55 s vs ≈ 100 s for a 4½-minute song on an M1 Pro); force one with
-`just demucs_device=cpu stems …` or `demucs_device=mps`. It runs demucs with `--shifts 0`, because demucs'
-default applies a random time shift that makes every run's stems differ; with it, repeated runs on the
-same device give identical files (checked on CPU and GPU). GPU and CPU stems still differ slightly from each other, so keep a song's cached stems rather than
+`NCART_DEMUCS` to use another demucs executable. ncart uses the Apple GPU (MPS) when torch can reach it
+and the CPU otherwise; force one with `ncart stems -device cpu` (or `just demucs_device=cpu stems …`). It
+runs demucs with `--shifts 0`, because demucs' default applies a random time shift that makes every run's
+stems differ; with it, repeated runs on the same device give identical files (checked on CPU and GPU).
+GPU and CPU stems still differ slightly from each other, so keep a song's cached stems rather than
 regenerating them on the other device.
 
 `reference/editor-sample.synth` (a map saved by the official editor) is used by the format tests. Its

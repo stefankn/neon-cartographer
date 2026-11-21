@@ -4,6 +4,7 @@ package generate
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/stefankn/neon-cartographer/internal/export"
 	"github.com/stefankn/neon-cartographer/internal/mapper"
 	"github.com/stefankn/neon-cartographer/internal/rules"
+	"github.com/stefankn/neon-cartographer/internal/stems"
 	"github.com/stefankn/neon-cartographer/internal/synthfile"
 )
 
@@ -30,6 +32,11 @@ type Options struct {
 	Seed          int64
 	NoCover       bool
 	Walls         bool // add a few side walls in calm sections (Hard and up)
+	// NoStems: don't use stems (by default cached stems are used, or the
+	// song is separated with demucs if it is installed).
+	NoStems bool
+	// Log receives progress messages, e.g. while demucs runs (nil: none).
+	Log io.Writer
 }
 
 // Report describes what was generated.
@@ -45,6 +52,9 @@ type Report struct {
 	NotesPerDiff     map[string]int
 	Map              *mapper.Map
 	Validation       []rules.DifficultyReport // of the written file
+	Stems            *stems.Stems             // nil without stems
+	StemsNote        string                   // why there are no stems, if expected
+	Warnings         []string
 }
 
 // Run executes the pipeline.
@@ -54,11 +64,21 @@ func Run(o Options, cfg config.Config) (*Report, error) {
 	}
 	rep := &Report{Out: o.Out, NotesPerDiff: map[string]int{}}
 
-	src, err := audio.Decode(o.In, cfg.Analysis.SampleRate)
+	mode := stems.Auto
+	if o.NoStems {
+		mode = stems.Off
+	}
+	opened, err := stems.Open(o.In, cfg.Analysis.SampleRate, cfg.Stems, mode, o.Log)
 	if err != nil {
 		return nil, err
 	}
-	r, err := analysis.Analyze(src, cfg.Analysis, analysis.Overrides{BPM: o.BPM, HalfBeat: o.HalfBeat})
+	src := opened.Mix
+	rep.Stems, rep.StemsNote, rep.Warnings = opened.Stems, opened.Note, opened.Warnings
+	ov := analysis.Overrides{BPM: o.BPM, HalfBeat: o.HalfBeat}
+	if rep.Stems != nil {
+		ov.Drums = rep.Stems.Drums
+	}
+	r, err := analysis.Analyze(src, cfg.Analysis, ov)
 	if err != nil {
 		return nil, err
 	}

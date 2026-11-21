@@ -15,6 +15,13 @@ type TempoEstimate struct {
 	AltBPM     float64 `json:"altBpm"`     // best candidate not within 4% of BPM or of its octaves
 	Overridden bool    `json:"overridden"` // BPM was given by the user
 	HalfBeat   bool    `json:"halfBeat"`   // phase moved half a beat by the user (-half-beat)
+	// PhaseSource is where the phase comes from: "mix", or "drums" (the
+	// drum stem, see Overrides.Drums). MixPhase is the mix's own phase
+	// (before -half-beat), kept for comparison.
+	PhaseSource string  `json:"phaseSource"`
+	MixPhase    float64 `json:"mixPhase"`
+	// DrumLevelDB: drum stem RMS relative to the mix (0 without a stem).
+	DrumLevelDB float64 `json:"drumLevelDb,omitempty"`
 }
 
 // combinedEnvelope is the weighted sum of normalised band envelopes with

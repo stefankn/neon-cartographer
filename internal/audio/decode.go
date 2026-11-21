@@ -168,6 +168,22 @@ func decodeWAV(path string) (*Audio, error) {
 	}, nil
 }
 
+// DecodeFFmpeg decodes path with ffmpeg (mono, at rate), regardless of the
+// format. ffmpeg trims an MP3's encoder delay where the file declares it;
+// the native MP3 decoder doesn't, so the two can differ in start time by
+// tens of ms. Use this when the audio must share ffmpeg's timeline, e.g.
+// with stems separated by demucs (which decodes with ffmpeg).
+func DecodeFFmpeg(path string, rate int) (*Audio, error) {
+	a, err := decodeFFmpeg(path, rate)
+	if err != nil {
+		return nil, fmt.Errorf("audio: %s: ffmpeg: %w", path, err)
+	}
+	if len(a.Samples) == 0 {
+		return nil, fmt.Errorf("audio: %s: no samples decoded", path)
+	}
+	return a, nil
+}
+
 func decodeFFmpeg(path string, rate int) (*Audio, error) {
 	bin, err := exec.LookPath("ffmpeg")
 	if err != nil {

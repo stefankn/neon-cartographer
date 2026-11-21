@@ -3,12 +3,14 @@
 //	ncart [generate] -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert] ...
 //	ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav] [-beat-test beat.wav]
 //	ncart validate song.synth [-difficulty hard]
+//	ncart stems -in song.mp3 [-device auto|cpu|mps] [-force]
 package main
 
 import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/stefankn/neon-cartographer/internal/generate"
 	"github.com/stefankn/neon-cartographer/internal/mapper"
 	"github.com/stefankn/neon-cartographer/internal/rules"
+	"github.com/stefankn/neon-cartographer/internal/stems"
 	"github.com/stefankn/neon-cartographer/internal/synthfile"
 )
 
@@ -27,15 +30,20 @@ const usage = `ncart — generate Synth Riders maps from music files
 Usage:
   ncart [generate] -in song.mp3 [-out song.synth] [-difficulties easy,normal,hard,expert]
                    [-title ".."] [-artist ".."] [-mapper neon-cartographer] [-bpm 126] [-half-beat] [-offset-ms 0]
-                   [-seed 42] [-walls]
+                   [-seed 42] [-walls] [-no-stems]
   ncart analyze -in song.mp3 [-bpm 128] [-half-beat] [-debug analysis.json] [-clicks check.wav]
-                [-beat-test beat.wav]
+                [-beat-test beat.wav] [-no-stems]
   ncart validate song.synth [-difficulty hard]
+  ncart stems -in song.mp3 [-device auto|cpu|mps] [-force]
 
 Commands:
   generate  write a .synth map (default command)
   analyze   decode and analyse a song, print a summary
   validate  check any .synth map against the playability rules
+  stems     separate a song into vocals/drums/bass/other with demucs (cached next to the song)
+
+generate and analyze use a song's stems automatically: cached ones, or they separate the song first
+if demucs is installed (just setup-stems). -no-stems switches that off.
 
 Run 'ncart <command> -h' for the command's flags.
 `
@@ -55,6 +63,8 @@ func main() {
 		err = runValidate(os.Args[2:])
 	case cmd == "analyze":
 		err = runAnalyze(os.Args[2:])
+	case cmd == "stems":
+		err = runStems(os.Args[2:])
 	case cmd == "-h" || cmd == "-help" || cmd == "--help" || cmd == "help":
 		fmt.Print(usage)
 		return
@@ -76,6 +86,7 @@ func runAnalyze(args []string) error {
 	debug := fs.String("debug", "", "write the full analysis as JSON to this file")
 	clicks := fs.String("clicks", "", "write the song mixed with beat clicks to this WAV file (higher click = bar start)")
 	beatTest := fs.String("beat-test", "", "write the song with a low tock on each detected beat and a high tick halfway between to this WAV file")
+	noStems := fs.Bool("no-stems", false, "don't use stems (default: cached ones, or separate with demucs if installed)")
 	fs.Parse(args)
 	if *in == "" {
 		fs.Usage()
@@ -84,20 +95,29 @@ func runAnalyze(args []string) error {
 	cfg := config.Default()
 
 	t0 := time.Now()
-	a, err := audio.Decode(*in, cfg.Analysis.SampleRate)
+	mode := stems.Auto
+	if *noStems {
+		mode = stems.Off
+	}
+	opened, err := stems.Open(*in, cfg.Analysis.SampleRate, cfg.Stems, mode, os.Stderr)
 	if err != nil {
 		return err
 	}
+	a := opened.Mix
 	tDecode := time.Since(t0)
 	t1 := time.Now()
-	r, err := analysis.Analyze(a, cfg.Analysis, analysis.Overrides{BPM: *bpm, HalfBeat: *halfBeat})
+	ov := analysis.Overrides{BPM: *bpm, HalfBeat: *halfBeat}
+	if opened.Stems != nil {
+		ov.Drums = opened.Stems.Drums
+	}
+	r, err := analysis.Analyze(a, cfg.Analysis, ov)
 	if err != nil {
 		return err
 	}
 	tAnalyze := time.Since(t1)
 
-	printSummary(*in, a, r)
-	fmt.Printf("\nTiming: decode %.1fs, analysis %.1fs\n", tDecode.Seconds(), tAnalyze.Seconds())
+	printSummary(*in, a, r, func() { printStems("%-12s ", opened.Stems, opened.Note, opened.Warnings, r) })
+	fmt.Printf("\nTiming: decode (and stems) %.1fs, analysis %.1fs\n", tDecode.Seconds(), tAnalyze.Seconds())
 
 	if *debug != "" {
 		b, err := json.MarshalIndent(r, "", " ")
@@ -136,12 +156,83 @@ func runAnalyze(args []string) error {
 	return nil
 }
 
+// printStems prints the stems and beat-phase lines (labels formatted with
+// labelFmt) and any stem warnings (to stderr).
+func printStems(labelFmt string, st *stems.Stems, note string, warnings []string, r *analysis.Result) {
+	label := func(s string) string { return fmt.Sprintf(labelFmt, s) }
+	if st == nil {
+		fmt.Printf("%s%s\n", label("Stems:"), note)
+	} else {
+		how := "cached"
+		if st.Separated {
+			how = fmt.Sprintf("separated in %.0f s on %s", st.SeparateSec, st.Device)
+		}
+		shifted := ""
+		if st.Shifted {
+			shifted = ", shifted to match"
+		}
+		fmt.Printf("%s%s (%s), offset vs song %+.1f ms (correlation %.2f)%s\n",
+			label("Stems:"), st.Dir, how, st.OffsetSec*1000, st.Corr, shifted)
+	}
+	te := r.Tempo
+	period := 60 / te.BPM
+	switch {
+	case te.PhaseSource == "drums":
+		p := te.Phase
+		if te.HalfBeat {
+			p -= period / 2
+		}
+		d := math.Mod((p-te.MixPhase)/period, 1)
+		if d > 0.5 {
+			d--
+		} else if d <= -0.5 {
+			d++
+		}
+		fmt.Printf("%sfrom the drum stem, %.3f s (the mix alone: %.3f s, %+.2f beat)\n",
+			label("Beat phase:"), math.Mod(p+period, period), te.MixPhase, d)
+	case st != nil:
+		fmt.Printf("%sfrom the mix (drum stem too quiet: %.1f dB)\n", label("Beat phase:"), te.DrumLevelDB)
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "Warning:", w)
+	}
+}
+
+func runStems(args []string) error {
+	fs := flag.NewFlagSet("stems", flag.ExitOnError)
+	in := fs.String("in", "", "input audio file")
+	device := fs.String("device", "auto", "demucs device: auto (Apple GPU if available), cpu or mps")
+	force := fs.Bool("force", false, "separate again even if stems are cached")
+	fs.Parse(args)
+	if *in == "" {
+		fs.Usage()
+		return fmt.Errorf("-in is required")
+	}
+	if _, err := os.Stat(*in); err != nil {
+		return err
+	}
+	cfg := config.Default().Stems
+	if stems.Cached(*in, cfg) && !*force {
+		fmt.Printf("Stems are cached in %s (use -force to separate again)\n", stems.Dir(*in, cfg))
+		return nil
+	}
+	t0 := time.Now()
+	dev, err := stems.Separate(*in, cfg, stems.SeparateOptions{Device: *device, Progress: os.Stderr})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Separated %s on %s in %.0f s → %s\n", *in, dev, time.Since(t0).Seconds(), stems.Dir(*in, cfg))
+	return nil
+}
+
 func mmss(sec float64) string {
 	m := int(sec) / 60
 	return fmt.Sprintf("%d:%04.1f", m, sec-float64(m*60))
 }
 
-func printSummary(path string, a *audio.Audio, r *analysis.Result) {
+// printSummary prints the analysis summary; afterGrid (if not nil) is
+// called right after the beat-grid line.
+func printSummary(path string, a *audio.Audio, r *analysis.Result, afterGrid func()) {
 	fmt.Printf("File:        %s (%s decoder, source %d Hz, %d ch)\n", path, a.Decoder, a.SourceRate, a.Channels)
 	fmt.Printf("Duration:    %s\n", mmss(r.Duration))
 	if r.Tempo.Overridden {
@@ -155,6 +246,9 @@ func printSummary(path string, a *audio.Audio, r *analysis.Result) {
 	}
 	fmt.Printf("Beat grid:   first beat at %.3f s%s, bars start on beat %d, %d beats, %d bars\n",
 		r.Grid.FirstBeat, shifted, r.Grid.DownbeatIndex, len(r.Beats), len(r.Bars))
+	if afterGrid != nil {
+		afterGrid()
+	}
 	fmt.Printf("Sound:       %s – %s\n", mmss(r.SoundStart), mmss(r.SoundEnd))
 
 	perBand := func(count func(band int) int) string {
@@ -230,6 +324,7 @@ func runGenerate(args []string) error {
 	noCover := fs.Bool("no-cover", false, "don't embed the song's cover art")
 	walls := fs.Bool("walls", false, "add a few side walls in calm sections (Hard and up)")
 	debug := fs.String("debug", "", "also write the analysis as JSON to this file")
+	noStems := fs.Bool("no-stems", false, "don't use stems (default: cached ones, or separate with demucs if installed)")
 	fs.Parse(args)
 	if *in == "" {
 		fs.Usage()
@@ -243,6 +338,7 @@ func runGenerate(args []string) error {
 	rep, err := generate.Run(generate.Options{
 		In: *in, Out: *out, Difficulties: names, Title: *title, Artist: *artist, Mapper: *mapperName,
 		BPM: *bpm, HalfBeat: *halfBeat, OffsetMs: *offsetMs, Seed: *seed, NoCover: *noCover, Walls: *walls,
+		NoStems: *noStems, Log: os.Stderr,
 	}, config.Default())
 	if err != nil {
 		if rep != nil && len(rep.Validation) > 0 {
@@ -261,6 +357,7 @@ func runGenerate(args []string) error {
 		fmt.Print(" (moved half a beat by -half-beat)")
 	}
 	fmt.Println()
+	printStems("%-10s ", rep.Stems, rep.StemsNote, rep.Warnings, r)
 	fmt.Printf("Audio:     %s, %.0f ms silence prepended so beats land on the grid (Offset 0)\n",
 		rep.Encoder, rep.Timeline.PadSec*1000)
 	fmt.Printf("Alignment: decoder shift %.1f ms corrected, residual %.2f ms (correlation %.2f)\n",

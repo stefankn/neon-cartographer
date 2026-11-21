@@ -6,6 +6,25 @@ type Config struct {
 	Analysis AnalysisConfig
 	Mapper   MapperConfig
 	Export   ExportConfig
+	Stems    StemsConfig
+}
+
+// StemsConfig tunes the optional stem separation (demucs) and the checks on
+// cached stems.
+type StemsConfig struct {
+	// Model is the demucs model; stems are cached in <song>.stems/<Model>/.
+	Model string
+	// MaxDurationDiffSec: cached stems whose length differs from the song by
+	// more than this are stale (another file under the same name) and ignored.
+	MaxDurationDiffSec float64
+	// MaxSearchSec: the stems' offset against the mix is searched within ±this.
+	MaxSearchSec float64
+	// MinAlignCorr: stems whose sum correlates less than this with the mix
+	// are ignored (measured: 0.98+ on the test songs).
+	MinAlignCorr float64
+	// MaxOffsetSec: stems further off than this are shifted by the measured
+	// lag (expected ≈ 0: mix and stems are both decoded by ffmpeg).
+	MaxOffsetSec float64
 }
 
 // ExportConfig tunes the written .synth file.
@@ -121,6 +140,13 @@ type AnalysisConfig struct {
 	// AccentQuantile: low and high onsets that coincide and are both above
 	// this strength quantile mark an accent (two-hand special candidate).
 	AccentQuantile float64
+
+	// DrumStemMinLevelDB: the beat phase is taken from the drum stem only if
+	// its RMS is at least this many dB relative to the mix; quieter drum
+	// stems (songs without drums: only leakage) leave the phase to the mix.
+	// Measured: drums −6.2 dB (Pure Shores), −6.7 dB (Bonobo); a drumless
+	// song hasn't been measured yet, so this is a wide margin.
+	DrumStemMinLevelDB float64
 }
 
 // Default returns the default configuration.
@@ -174,5 +200,13 @@ func Default() Config {
 		SustainMinLevel:  0.5,
 
 		AccentQuantile: 0.8,
+
+		DrumStemMinLevelDB: -20,
+	}, Stems: StemsConfig{
+		Model:              "htdemucs",
+		MaxDurationDiffSec: 0.1,
+		MaxSearchSec:       0.15,
+		MinAlignCorr:       0.5,
+		MaxOffsetSec:       0.002,
 	}}
 }
