@@ -203,6 +203,26 @@ just analyze       # analysis summary, out/analysis.json and click track out/che
 
 `demo` and `analyze` need the test song (see below).
 
+Stem separation (experimental, not used by `ncart` yet) uses [demucs](https://github.com/facebookresearch/demucs)
+in its own Python environment: a [uv](https://docs.astral.sh/uv/) project in `tools/stems` (`pyproject.toml`
+and the committed `uv.lock` pin every package). The venv goes in `tools/stems/.venv` (≈ 450 MB, git-ignored),
+uv's own Python 3.12 in `~/.local/share/uv/python` (≈ 50 MB) and the model weights in `~/.cache/torch`
+(≈ 80 MB, on the first run); the system Python is untouched:
+
+```
+just setup-stems                  # create/update tools/stems/.venv exactly as locked
+just stems testdata/song.mp3      # → testdata/song.mp3.stems/htdemucs/{vocals,drums,bass,other}.wav
+rm -rf tools/stems/.venv          # remove it again (optionally also: uv python uninstall 3.12)
+```
+
+To change versions, edit `tools/stems/pyproject.toml` and run `uv lock --project tools/stems`. Set
+`NCART_DEMUCS` to use another demucs executable. `just stems` uses the Apple GPU (MPS) when torch can reach
+it and the CPU otherwise (≈ 55 s vs ≈ 100 s for a 4½-minute song on an M1 Pro); force one with
+`just demucs_device=cpu stems …` or `demucs_device=mps`. It runs demucs with `--shifts 0`, because demucs'
+default applies a random time shift that makes every run's stems differ; with it, repeated runs on the
+same device give identical files (checked on CPU and GPU). GPU and CPU stems still differ slightly from each other, so keep a song's cached stems rather than
+regenerating them on the other device.
+
 `reference/editor-sample.synth` (a map saved by the official editor) is used by the format tests. Its
 audio is replaced by one second of silence; the map data is unchanged editor output.
 `docs/synth-format.md` documents the file format.

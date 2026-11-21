@@ -20,6 +20,13 @@ go run ./cmd/ncart analyze -in testdata/bonobo-drift.mp3 -debug /tmp/a.json -cli
 
 Toolchain: Go 1.24+ (gonum v0.17 requires it). External tools: **sox** (required for Ogg export; the
 Homebrew ffmpeg here has *no* libvorbis), ffmpeg/ffprobe (optional: tags, cover art, other formats).
+Optional, experimental: **demucs** via `just setup-stems` (needs uv; sandboxed sessions need write access
+to `~/.local/share/uv` plus outgoing network for uv *and* the venv's Python, which downloads the model on
+first run). `just stems` picks the device itself (`demucs_device=auto`: MPS if torch can use it, else
+CPU). **In a nono-sandboxed session Metal is unreachable** (nono 0.81 has no GPU/IOKit grant; torch then
+says "MPS backend is supported on MacOS 13.0+", which is misleading — outside the sandbox MPS works), so
+Claude gets the CPU (≈ 100 s per song) automatically; don't force `mps` there. Stems are cached per song,
+so this only matters for new songs.
 
 ## Layout and data flow
 
@@ -39,7 +46,9 @@ reference/            editor-sample.synth — saved by the official editor 1.9.7
                       JSON entries are untouched editor output; the audio is replaced by 1 s of silence
                       (copyright) and the zip was rebuilt — see docs/synth-format.md
 testdata/             bonobo-drift.mp3 (126 BPM), all_saints-pure_shores.mp3 (100.6 BPM) — test songs; local
-                      only, git-ignored (copyrighted). Both need -half-beat (felt beat, user-verified)
+                      only, git-ignored (copyrighted). Both need -half-beat (felt beat, user-verified).
+                      <song>.stems/ = demucs output (git-ignored, copyrighted too)
+tools/stems/          uv project for the optional demucs tool (pyproject.toml, uv.lock; .venv git-ignored)
 out/                  generated maps (not source)
 ```
 
@@ -84,6 +93,12 @@ Confirmed by the user in Beatmap Editor 1.9.7 and on a Quest 3:
   listening-verified set of songs. `-clicks` alone misleads: clicks on a drum hit get masked.
 - Different MP3 decoders differ in start delay; that's why the export measures alignment instead of
   trusting it.
+- **demucs is random by default** (`--shifts 1` = one random time shift): two CPU runs on the same clip
+  differed by 8 % RMS on vocals; GPU vs CPU stems of Bonobo by 4–18 %. `just stems` passes `--shifts 0`
+  → repeated runs are bit-identical on the same device (CPU: clip; MPS: full Bonobo, checked by the user
+  2026-11-21). GPU and CPU still differ from each other, so treat a
+  song's cached stems as fixed input. Bonobo's stems sum to the original within 10 % (Pure Shores 2.3 %) on
+  both devices — that's the song, not the device.
 - The editor stores 32-bit floats (`0.00120002031`): compare positions with tolerances.
 - Notes during the *other* hand's rail don't count toward same-hand runs (rules and mapper agree).
 - Note selection is per bar (`selectByBars`): each bar's positions are ranked by metric weight + mean
@@ -121,12 +136,24 @@ both songs (user-verified by ear), so step 1 favoured the real off-beats. `-half
 
 Next steps:
 1. **Stem separation** (user's call): the rhythm works, but maps should follow more of what happens in
-   the music (vocals, melody, which instrument leads). Plan: separate vocals/drums/bass/other with an
-   optional external tool like sox (demucs.cpp is the Python-free candidate; ONNX via onnxruntime_go
-   needs cgo), cache the stems next to the song, fall back to today's pipeline without it. Start with a
-   one-off experiment on Pure Shores: notes from vocal-stem onsets + real vocal pitch.
-2. Automatic beat phase (so `-half-beat` isn't needed): collect listening-verified songs with
-   `analyze -beat-test` first; a drum stem from step 1 should make this much easier.
+   the music (vocals, melody, which instrument leads). Tool: Python **demucs** (htdemucs) in a uv venv
+   (user's call, over demucs.cpp/ONNX). **Done:** uv project `tools/stems` (pyproject.toml + committed
+   uv.lock: demucs 4.0.1 / torch+torchaudio 2.8 / soundfile — torchaudio 2.8 has no save backend without
+   soundfile); `just setup-stems` = `uv sync --locked` into `tools/stems/.venv` (uv-managed Python 3.12 in
+   `~/.local/share/uv/python`; `NCART_DEMUCS` overrides the demucs path — step 3's Go side should use the
+   same default and override) and `just stems <song>` → `<song>.stems/htdemucs/<stem>.wav` (MPS ≈ 55 s if
+   available, else CPU ≈ 100 s per song; `--shifts 0` for reproducible stems). Measured on Pure Shores: stems are sample-exact with the *ffmpeg* decode (lag 0,
+   stem sum within 2.3 % RMS); our native MP3 decoder and sox/MAD start ≈ 50 ms later → stems must be
+   aligned with `MeasureOffset`, never assumed. Next: Go side (`internal/stems`: find cache, align,
+   fall back without stems), then the vocal experiment: notes from vocal-stem onsets + real vocal pitch.
+   **Decided (user, 2026-11-21):** when stems are used, ncart decodes the song through ffmpeg (the existing
+   fallback path in `audio/decode.go`) so analysis and stems share one clock; still run `MeasureOffset`
+   stems ↔ analysed audio as a check (expect ≈ 0 ms). Not chosen: feeding demucs our own decode (it's
+   mono; demucs separates better from stereo).
+2. Automatic beat phase (so `-half-beat` isn't needed): **the drum stem's detected beat equals the
+   user-verified felt beat on both test songs** (Pure Shores 0.447 s vs `-half-beat` 0.450 s; Bonobo 0.134
+   vs 0.137, on the ffmpeg clock). Bass stem agrees on Pure Shores only. Two songs is not a verified set —
+   still collect more listening-verified songs with `analyze -beat-test` before relying on it.
 3. Smaller: section labels (Pure Shores: 27 of 28 phrases "calm" → sparse maps), density following
    energy continuously instead of 3 labels, more pairs (fire ~once per song).
 

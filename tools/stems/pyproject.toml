@@ -1,0 +1,16 @@
+# Optional stem separation tool (demucs) for neon-cartographer. Not a Python package: this only
+# pins the environment. Set up with `just setup-stems` (= uv sync --project tools/stems).
+[project]
+name = "ncart-stems"
+version = "0.1.0"
+description = "demucs environment for neon-cartographer stem separation"
+requires-python = "==3.12.*"
+dependencies = [
+    "demucs==4.0.1",       # last release; htdemucs model
+    "torch==2.8.*",        # torchaudio >= 2.9 dropped the save backend demucs uses
+    "torchaudio==2.8.*",
+    "soundfile==0.14.0",   # torchaudio 2.8 can't save WAV without a backend
+]
+
+[tool.uv]
+package = false

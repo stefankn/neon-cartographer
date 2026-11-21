@@ -4,6 +4,7 @@
 # Test songs: commercial, copyrighted audio — keep locally, never commit
 /testdata/*.mp3
 /testdata/*.synth
+/testdata/*.stems/
 
 # Go build and test artifacts
 /ncart
@@ -27,3 +28,4 @@ check*.wav
 
 # Local Claude Code settings
 .claude/settings.local.json
+/tools/stems/.venv/
